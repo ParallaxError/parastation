@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "parastation-core",
+    "parastation-frontend",
+]
+resolver = "2"

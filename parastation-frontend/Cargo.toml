@@ -1,0 +1,7 @@
+[package]
+name = "parastation-frontend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+parastation-core = { path = "../parastation-core" }
