@@ -11,9 +11,8 @@
  */
 
 /// Represents one of the coprocessor 0 registers.
-pub struct Cop0Register {
-    index: u8,
-}
+#[derive(Debug)]
+pub struct Cop0Register(pub u8);
 
 /// Coprocessor 0, mandated by the MIPS architecture. Handles exceptions, interrupts, traps, 
 /// syscalls, etc on the PS1. 
@@ -40,21 +39,21 @@ impl Cop0 {
 // Section 2.35 of https://vojty.github.io/psx-guide/guide.pdf contains the register indices.
 impl Cop0
 {
-    pub fn read(&self, reg: u8) -> u32 {
+    pub fn read(&self, reg: Cop0Register) -> u32 {
         match reg {
-            12 => self.sr,
-            13 => self.cause,
-            14 => self.epc,
-            _ => panic!("Invalid CP0 register index: {}", reg),
+            Cop0Register(12) => self.sr,
+            Cop0Register(13) => self.cause,
+            Cop0Register(14) => self.epc,
+            _ => { eprintln!("Invalid CP0 register index: {:?}", reg); 0 }
         }
     }
 
-    pub fn write(&mut self, reg: u8, value: u32) {
+    pub fn write(&mut self, reg: Cop0Register, value: u32) {
         match reg {
-            12 => self.sr = value,
-            13 => self.cause = value,
-            14 => self.epc = value,
-            _ => panic!("Invalid CP0 register index: {}", reg),
+            Cop0Register(12) => self.sr = value,
+            Cop0Register(13) => self.cause = value,
+            Cop0Register(14) => self.epc = value,
+            _ => eprintln!("Invalid CP0 register index: {:?}", reg)
         }
     }
 }

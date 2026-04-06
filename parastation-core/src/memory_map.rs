@@ -12,7 +12,7 @@
 // Neat pattern from section 2.8 of https://vojty.github.io/psx-guide/guide.pdf
 // The Range struct encapsulates the range of a memory mapped region and also returns the
 // physical address by subtracting the base
-struct Range {
+pub struct Range {
     start: u32,
     end: u32,
 }
@@ -34,7 +34,7 @@ impl Range {
 // More or less from the guide since it exhaustively details the PS1 memory map
 
 // 2 MB of RAM, mirrored every 2 MB until 0x1FFF_FFFF
-pub const RAM: Range = Range { start: 0x0000_0000, end: 0x1FFF_FFFF };
+pub const RAM: Range = Range { start: 0x0000_0000, end: 0x001F_FFFF };
 
 // 512 KB of BIOS, mapped at 0x1FC0_0000
 pub const BIOS: Range = Range { start: 0x1FC0_0000, end: 0x1FC7_FFFF };

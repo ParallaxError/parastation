@@ -9,10 +9,17 @@
  * -----
  */
 
-pub struct GteRegister {
-    index: u8,
-}
+#[derive(Debug)]
+pub struct GteRegister(pub u8);
 
 pub struct Gte {
     // Pass for now
+}
+
+impl Gte {
+    pub fn new() -> Self {
+        Self {
+            // Nothing to initialize for now
+        }
+    }
 }

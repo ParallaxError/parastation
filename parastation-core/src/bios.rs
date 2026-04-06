@@ -8,8 +8,8 @@
  */
 
 // Imports
-use std::fs::File;
-use std::io::{Read, Result};
+use std::fs;
+use std::io::Error;
 use std::path::Path;
 
 /// ROM image of the PS1 BIOS. Provides read-only access to the BIOS data.
@@ -23,12 +23,12 @@ pub struct Bios {
 // File IO
 impl Bios {
     /// Load BIOS data from a file at the given path. The file must be exactly 512KB in size.
-    pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self, String> {
+    pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         let data = fs::read(path)
-            .map_err(|e| format!("Failed to read BIOS file: {}", e))?;
+            .map_err(|e| Error::new(e.kind(), format!("Failed to read BIOS file: {}", e)))?;
 
         if data.len() != 512 * 1024 {
-            return Err(format!("Invalid BIOS file size: expected 512KB, got {} bytes", data.len()));
+            return Err(Error::new(std::io::ErrorKind::InvalidData, "Invalid BIOS file size"));
         }
 
         let mut buf = Box::new([0u8; 512 * 1024]);

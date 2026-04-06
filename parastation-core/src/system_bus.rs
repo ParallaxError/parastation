@@ -12,6 +12,7 @@
  */
 
 // Imports
+use crate::memory_map::*;
 use crate::bios::Bios;
 use crate::ram::Ram;
 
@@ -30,7 +31,7 @@ pub struct SystemBus {
 impl SystemBus {
     pub fn new(bios: Bios) -> Self {
         Self {
-            ram: MainRam::new(),
+            ram: Ram::new(),
             bios,
         }
     }
@@ -89,7 +90,7 @@ macro_rules! bus_write {
             return $self.ram.$method(offset, $value);
         }
 
-        eprintln!("Unhandled write at {addr:#010x} with value {value:#010x}");
+        eprintln!("Unhandled write at {addr:#010x} with value {:#010x}", $value);
     }}
 }
 

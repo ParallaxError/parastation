@@ -9,8 +9,13 @@
  * -----
  */
 
+use crate::cpu::MipsRegister;
+use crate::cpu::cop0::Cop0Register;
+use crate::cpu::gte::GteRegister;
+
 /// Enum representing a MIPS instruction, with variants for each instruction type (R, I, J) and
 /// each opcode/funct combination. This is the main IR for MIPS instructions in the emulator.   
+#[derive(Debug)]
 pub enum IrOp {
     // ALU MipsRegisterister (R type) instructions
     Add  { dst: MipsRegister, lhs: MipsRegister, rhs: MipsRegister },
@@ -191,6 +196,8 @@ impl IrOp
             0x38 => Self::Swc0 { src: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
             // SWC2
             0x3A => Self::Swc2 { src: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
+            // Default case for unimplemented opcodes
+            _ => Self::Unimplemented(raw),
         }
     }
 

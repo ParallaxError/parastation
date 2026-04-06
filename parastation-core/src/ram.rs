@@ -13,7 +13,7 @@
 /// The RAM is mirrored thrice at 0x00200000, 0x00400000, and 0x00600000, it is the responsibility
 /// of the system bus to remove the higher bits of the address to ensure the correct RAM location is
 /// accessed.
-struct Ram {
+pub struct Ram {
     data: Box<[u8; 2 * 1024 * 1024]>, // PS1 RAM is 2MB
 }
 
