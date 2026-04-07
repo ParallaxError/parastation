@@ -90,6 +90,10 @@ impl Interpreter {
             IrOp::Jalr { dst, src } => self.op_jalr(dst, src, cpu),
             IrOp::Bne { lhs, rhs, offset } => self.op_bne(lhs, rhs, offset, cpu),
 
+            // Exceptions
+            IrOp::Syscall => self.op_syscall(cpu),
+            IrOp::Break => self.op_break(cpu),
+
             // Coprocessor opcodes
             IrOp::Mfc0 { dst, cop_reg } => self.op_mfc0(dst, cop_reg, cpu),
             IrOp::Mtc0 { src, cop_reg } => self.op_mtc0(src, cop_reg, cpu),
@@ -214,8 +218,7 @@ impl Interpreter {
         let rhs_val = cpu.read_reg(rhs);
         let (result, overflowed) = lhs_val.overflowing_add(rhs_val);
         if overflowed {
-            // TODO Handle overflow exception
-            unimplemented!("Integer overflow exception not implemented");
+            self.trigger_exception(cpu, EXCEPTION_Ov);
         } else {
             cpu.write_reg(dst, result);
         }
@@ -233,8 +236,7 @@ impl Interpreter {
         let rhs_val = cpu.read_reg(rhs);
         let (result, overflowed) = lhs_val.overflowing_sub(rhs_val);
         if overflowed {
-            // TODO Handle overflow exception
-            unimplemented!("Integer overflow exception not implemented");
+            self.trigger_exception(cpu, EXCEPTION_Ov);
         } else {
             cpu.write_reg(dst, result);
         }
@@ -473,7 +475,7 @@ impl Interpreter {
     fn op_jal(&mut self, target: u32, cpu: &mut Cpu) {
         let pc_hi = cpu.pc() & 0xF0000000;
         let target_addr = (target << 2) | pc_hi;
-        cpu.write_reg(MipsRegister(31), cpu.next_pc() + 4); // Store return address in $ra
+        cpu.write_reg(MipsRegister(31), cpu.pc() + 4); // Store return address in $ra
         cpu.set_next_pc(target_addr);
         cpu.set_in_delay_slot(true);
     }
@@ -487,7 +489,7 @@ impl Interpreter {
     // call rs,ret=rd   jalr (rd,)rs(,rd)  pc=rs, rd=$+8 ;see caution
     fn op_jalr(&mut self, dst: MipsRegister, src: MipsRegister, cpu: &mut Cpu) {
         let target_addr = cpu.read_reg(src);
-        cpu.write_reg(dst, cpu.next_pc() + 4); // Store return address in rd
+        cpu.write_reg(dst, cpu.pc() + 4); // Store return address in rd
         cpu.set_next_pc(target_addr);
         cpu.set_in_delay_slot(true);
     }
@@ -496,7 +498,7 @@ impl Interpreter {
         let lhs_val = cpu.read_reg(lhs);
         let rhs_val = cpu.read_reg(rhs);
         if lhs_val == rhs_val {
-            let target_pc = cpu.next_pc().wrapping_add((offset as i32 as u32) << 2);
+            let target_pc = cpu.pc().wrapping_add((offset as i32 as u32) << 2);
             cpu.set_next_pc(target_pc);
             cpu.set_in_delay_slot(true);
         }
@@ -506,7 +508,7 @@ impl Interpreter {
         let lhs_val = cpu.read_reg(lhs);
         let rhs_val = cpu.read_reg(rhs);
         if lhs_val != rhs_val {
-            let target_pc = cpu.next_pc().wrapping_add((offset as i32 as u32) << 2);
+            let target_pc = cpu.pc().wrapping_add((offset as i32 as u32) << 2);
             cpu.set_next_pc(target_pc);
             cpu.set_in_delay_slot(true);
         }
@@ -515,7 +517,7 @@ impl Interpreter {
     fn op_bltz(&mut self, src: MipsRegister, offset: i16, cpu: &mut Cpu) {
         let src_val = cpu.read_reg(src) as i32;
         if src_val < 0 {
-            let target_pc = cpu.next_pc().wrapping_add((offset as i32 as u32) << 2);
+            let target_pc = cpu.pc().wrapping_add((offset as i32 as u32) << 2);
             cpu.set_next_pc(target_pc);
             cpu.set_in_delay_slot(true);
         }
@@ -524,7 +526,7 @@ impl Interpreter {
     fn op_bgez(&mut self, src: MipsRegister, offset: i16, cpu: &mut Cpu) {
         let src_val = cpu.read_reg(src) as i32;
         if src_val >= 0 {
-            let target_pc = cpu.next_pc().wrapping_add((offset as i32 as u32) << 2);
+            let target_pc = cpu.pc().wrapping_add((offset as i32 as u32) << 2);
             cpu.set_next_pc(target_pc);
             cpu.set_in_delay_slot(true);
         }
@@ -533,7 +535,7 @@ impl Interpreter {
     fn op_bgtz(&mut self, src: MipsRegister, offset: i16, cpu: &mut Cpu) {
         let src_val = cpu.read_reg(src) as i32;
         if src_val > 0 {
-            let target_pc = cpu.next_pc().wrapping_add((offset as i32 as u32) << 2);
+            let target_pc = cpu.pc().wrapping_add((offset as i32 as u32) << 2);
             cpu.set_next_pc(target_pc);
             cpu.set_in_delay_slot(true);
         }
@@ -542,7 +544,7 @@ impl Interpreter {
     fn op_blez(&mut self, src: MipsRegister, offset: i16, cpu: &mut Cpu) {
         let src_val = cpu.read_reg(src) as i32;
         if src_val <= 0 {
-            let target_pc = cpu.next_pc().wrapping_add((offset as i32 as u32) << 2);
+            let target_pc = cpu.pc().wrapping_add((offset as i32 as u32) << 2);
             cpu.set_next_pc(target_pc);
             cpu.set_in_delay_slot(true);
         }
@@ -551,8 +553,8 @@ impl Interpreter {
     fn op_bltzal(&mut self, src: MipsRegister, offset: i16, cpu: &mut Cpu) {
         let src_val = cpu.read_reg(src) as i32;
         if src_val < 0 {
-            let target_pc = cpu.next_pc().wrapping_add((offset as i32 as u32) << 2);
-            cpu.write_reg(MipsRegister(31), cpu.next_pc() + 4); // Store return address in $ra
+            let target_pc = cpu.pc().wrapping_add((offset as i32 as u32) << 2);
+            cpu.write_reg(MipsRegister(31), cpu.pc() + 4); // Store return address in $ra
             cpu.set_next_pc(target_pc);
             cpu.set_in_delay_slot(true);
         }
@@ -561,11 +563,68 @@ impl Interpreter {
     fn op_bgezal(&mut self, src: MipsRegister, offset: i16, cpu: &mut Cpu) {
         let src_val = cpu.read_reg(src) as i32;
         if src_val >= 0 {
-            let target_pc = cpu.next_pc().wrapping_add((offset as i32 as u32) << 2);
-            cpu.write_reg(MipsRegister(31), cpu.next_pc() + 4); // Store return address in $ra
+            let target_pc = cpu.pc().wrapping_add((offset as i32 as u32) << 2);
+            cpu.write_reg(MipsRegister(31), cpu.pc() + 4); // Store return address in $ra
             cpu.set_next_pc(target_pc);
             cpu.set_in_delay_slot(true);
         }
+    }
+}
+
+// Exceptions
+// Exception cause constants
+// https://problemkaputt.de/psx-spx.htm#cop0exceptionhandling
+const EXCEPTION_INT: u8 = 0x0;
+const EXCEPTION_AdEL: u8 = 0x4;
+const EXCEPTION_AdES: u8 = 0x5;
+const EXCEPTION_IBE: u8 = 0x6;
+const EXCEPTION_DBE: u8 = 0x7;
+const EXCEPTION_Syscall: u8 = 0x8;
+const EXCEPTION_BP: u8 = 0x9;
+const EXCEPTION_RI: u8 = 0xA;
+const EXCEPTION_CpU: u8 = 0xB;
+const EXCEPTION_Ov: u8 = 0xC;
+
+impl Interpreter {
+    // TODO lotta magics
+    // https://github.com/simias/psx-guide/, section 2.71
+    fn trigger_exception(&mut self, cpu: &mut Cpu, cause: u8) {
+        // Start by populating the EPC
+        // Populate with the branch if in a branch delay slot, otherwise current instruction
+        let epc = if cpu.in_delay_slot() {
+            // Need to set bit 31 of Cause register to indicate delay slot
+            cpu.write_cop0(Cop0Register(13), ((cause as u32) << 2) | (1 << 31));
+            cpu.pc().wrapping_sub(4)
+        } else {
+            cpu.write_cop0(Cop0Register(13), (cause as u32) << 2);
+            cpu.pc()
+        };
+
+        cpu.write_cop0(Cop0Register(14), epc);
+
+        // Shift the SR mode bits
+        // This populates the previous mode, which we need when we return from the exception
+        let sr = cpu.read_cop0(Cop0Register(12));
+        cpu.write_cop0(Cop0Register(12), (sr & !0x3F) | ((sr & 0xF) << 2));
+
+        // Jump to the exception vector without a branch delay
+        // If BEV bit is set in the SR, we use the BIOS vector, otherwise RAM vector
+        let vector = if sr & (1 << 22) != 0 {
+            0xBFC0_0180
+        } else {
+            0x8000_0080
+        };
+
+        cpu.set_pc(vector);
+        cpu.set_next_pc(vector.wrapping_add(4));
+    }
+
+    fn op_syscall(&mut self, cpu: &mut Cpu) {
+        self.trigger_exception(cpu, EXCEPTION_Syscall);
+    }
+
+    fn op_break(&mut self, cpu: &mut Cpu) {
+        self.trigger_exception(cpu, EXCEPTION_BP);
     }
 }
 
@@ -610,6 +669,9 @@ impl Interpreter {
     }
 
     fn op_rfe(&mut self, cpu: &mut Cpu) {
-        unimplemented!("RFE instruction is not implemented");
+        // Shift SR bits back to restore previous mode
+        let sr = cpu.read_cop0(Cop0Register(12));
+        let new_sr = (sr & !0xF) | ((sr >> 2) & 0xF);
+        cpu.write_cop0(Cop0Register(12), new_sr);
     }
 }
