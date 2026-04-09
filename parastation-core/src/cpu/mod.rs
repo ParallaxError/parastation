@@ -16,7 +16,7 @@ pub use gte::Gte;
 pub use gte::GteRegister;
 
 /// Represents one of the 32 GPRs of the MIPS R3000A.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct MipsRegister(pub u8);
 
 /// Represents the PS1 CPU, a MIPS R3000A. Contains the CPU state (registers, PC, etc.)
@@ -24,6 +24,7 @@ pub struct Cpu {
     registers: [u32; 32], // 32 general purpose registers
     pc: u32, // Program counter
     next_pc: u32, // Next program counter (for branch delay slot)
+    current_pc: u32, // Current program counter (for exceptions)
 
     hi: u32, // HI register for multiplication/division results
     lo: u32, // LO register for multiplication/division results
@@ -32,7 +33,8 @@ pub struct Cpu {
     gte: Gte, // Geometry Transformation Engine for 3D graphics
 
     in_delay_slot: bool, // Whether currently executing an instruction in a branch delay slot
-    load_delay: Option<(MipsRegister, u32)>, // Pending load (dst reg, value)
+    load_delay: Option<(MipsRegister, u32)>, // Pending load to commit this step
+    next_load_delay: Option<(MipsRegister, u32)>, // Pending load for the following step
 }
 
 // Reset behaviour
@@ -42,6 +44,7 @@ impl Cpu {
             registers: [0; 32],
             pc: 0xBFC0_0000, // Start of BIOS in memory
             next_pc: 0xBFC0_0004,
+            current_pc: 0xBFC0_0000,
 
             hi: 0,
             lo: 0,
@@ -51,6 +54,7 @@ impl Cpu {
 
             in_delay_slot: false,
             load_delay: None,
+            next_load_delay: None,
         }
     }
 }
@@ -68,6 +72,21 @@ impl Cpu {
         }
     }
 
+    pub fn read_reg_or_pending(&self, reg: MipsRegister) -> u32 {
+        // check next_load_delay first, then load_delay, then register file
+        if let Some((pending_reg, val)) = self.next_load_delay {
+            if pending_reg.0 == reg.0 {
+                return val;
+            }
+        }
+        if let Some((pending_reg, val)) = self.load_delay {
+            if pending_reg.0 == reg.0 {
+                return val;
+            }
+        }
+        self.read_reg(reg)
+    }
+
     // PC and next PC
     pub fn pc(&self) -> u32 {
         self.pc
@@ -83,6 +102,14 @@ impl Cpu {
 
     pub fn set_next_pc(&mut self, value: u32) {
         self.next_pc = value;
+    }
+
+    pub fn current_pc(&self) -> u32 {
+        self.current_pc
+    }
+
+    pub fn set_current_pc(&mut self, value: u32) {
+        self.current_pc = value;
     }
 
     // Hi/lo
@@ -116,10 +143,24 @@ impl Cpu {
         if let Some((reg, value)) = self.load_delay.take() {
             self.write_reg(reg, value);
         }
+
+        // Move next-step pending load into the current commit slot.
+        self.load_delay = self.next_load_delay.take();
     }
 
     pub fn set_load_delay(&mut self, reg: MipsRegister, val: u32) {
-        self.load_delay = Some((reg, val));
+        if reg.0 == 0 { return; }
+    
+        // If there's a pending commit for the same register, cancel it
+        // (second load to same register cancels the first)
+        if let Some((pending_reg, _)) = self.load_delay {
+            if pending_reg.0 == reg.0 {
+                self.load_delay = None;
+            }
+        }
+
+
+        self.next_load_delay = Some((reg, val));
     }
 
     // Branch delay slot

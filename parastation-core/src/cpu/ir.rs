@@ -68,6 +68,12 @@ pub enum IrOp {
     Sh { src: MipsRegister, base: MipsRegister, offset: i16 },
     Sw { src: MipsRegister, base: MipsRegister, offset: i16 },
 
+    // Unaligned load/store
+    Lwl { dst: MipsRegister, base: MipsRegister, offset: i16 },
+    Lwr { dst: MipsRegister, base: MipsRegister, offset: i16 },
+    Swl { src: MipsRegister, base: MipsRegister, offset: i16 },
+    Swr { src: MipsRegister, base: MipsRegister, offset: i16 },
+
     // Branches (I type) instructions
     Beq  { lhs: MipsRegister, rhs: MipsRegister, offset: i16 },
     Bne  { lhs: MipsRegister, rhs: MipsRegister, offset: i16 },
@@ -175,19 +181,26 @@ impl IrOp
             0x20 => Self::Lb { dst: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
             // LH
             0x21 => Self::Lh { dst: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
+            // LWL
+            0x22 => Self::Lwl { dst: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
             // LW
             0x23 => Self::Lw { dst: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
+            // LWR
+            0x26 => Self::Lwr { dst: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
             // LBU
             0x24 => Self::Lbu { dst: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
             // LHU
             0x25 => Self::Lhu { dst: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
-            // TODO what is LWR and SWR?
             // SB
             0x28 => Self::Sb { src: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
             // SH
             0x29 => Self::Sh { src: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
+            // SWL
+            0x2A => Self::Swl { src: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
             // SW
             0x2B => Self::Sw { src: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
+            // SWR
+            0x2E => Self::Swr { src: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
             // LWC0
             0x30 => Self::Lwc0 { dst: Self::rt(raw), base: Self::rs(raw), offset: Self::imm16(raw) as i16 },
             // LWC2

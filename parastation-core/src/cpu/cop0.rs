@@ -23,6 +23,8 @@ pub struct Cop0 {
     sr: u32, // Status Register
     cause: u32, // Cause Register
     epc: u32, // Exception Program Counter
+    badaddrv: u32, // Bad Virtual Address, set by exceptions
+    dcic: u32, // Debug Control/Identification Register
 }
 
 impl Cop0 {
@@ -31,25 +33,32 @@ impl Cop0 {
             sr: 0,
             cause: 0,
             epc: 0,
+            badaddrv: 0,
+            dcic: 0,
         }
     }
 }
 
 // Read and write interfaces
 // Section 2.35 of https://vojty.github.io/psx-guide/guide.pdf contains the register indices.
-impl Cop0
-{
+impl Cop0 {
     pub fn read(&self, reg: Cop0Register) -> u32 {
         match reg {
+            Cop0Register(6) | Cop0Register(9) => 0,
+            Cop0Register(7) => self.dcic,
+            Cop0Register(8) => self.badaddrv,
             Cop0Register(12) => self.sr,
             Cop0Register(13) => self.cause,
             Cop0Register(14) => self.epc,
+            Cop0Register(15) => 0x0000_0002, // Processor ID register, R3000A
             _ => { eprintln!("Invalid CP0 register index: {:?}", reg); 0 }
         }
     }
 
     pub fn write(&mut self, reg: Cop0Register, value: u32) {
         match reg {
+            Cop0Register(7) => self.dcic = value,
+            Cop0Register(8) => self.badaddrv = value,
             Cop0Register(12) => self.sr = value,
             Cop0Register(13) => self.cause = value,
             Cop0Register(14) => self.epc = value,

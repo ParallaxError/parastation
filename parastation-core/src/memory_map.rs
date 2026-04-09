@@ -36,5 +36,23 @@ impl Range {
 // 2 MB of RAM, mirrored every 2 MB until 0x1FFF_FFFF
 pub const RAM: Range = Range { start: 0x0000_0000, end: 0x001F_FFFF };
 
+// Expansion region 1 (ROM/RAM), 8 MB
+pub const EXP1: Range = Range { start: 0x1F00_0000, end: 0x1F7F_FFFF };
+
+// Scratchpad (data cache used as fast RAM), 1 KB
+pub const SCRATCHPAD: Range = Range { start: 0x1F80_0000, end: 0x1F80_03FF };
+
+// IO ports (8Kb), mapped at 0x1F80_1000\
+// GPU status
+pub const GPU_REGISTERS: Range = Range { start: 0x1F80_1810, end: 0x1F80_1818 };
+pub const SPU_REGISTERS: Range = Range { start: 0x1F80_1C00, end: 0x1F80_1E80 };
+pub const IO_PORTS: Range = Range { start: 0x1F80_1000, end: 0x1F80_1FFF };
+
+// Expansion region 2: Contains serial port
+pub const EXP2: Range = Range { start: 0x1F80_2000, end: 0x1F80_207F };
+
+// Expansion region 3, whatever purpose: 2MB at 0x1FA0_0000
+pub const EXP3: Range = Range { start: 0x1FA0_0000, end: 0x1FBF_FFFF };
+
 // 512 KB of BIOS, mapped at 0x1FC0_0000
 pub const BIOS: Range = Range { start: 0x1FC0_0000, end: 0x1FC7_FFFF };

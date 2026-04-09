@@ -15,6 +15,7 @@
 use crate::memory_map::*;
 use crate::bios::Bios;
 use crate::ram::Ram;
+use crate::scratchpad::Scratchpad;
 
 /// Main pathway for all memory flow through the PS1 system, and owner of all hardware components. 
 /// All memory reads and writes from the CPU go through the system bus, which routes them to the
@@ -24,6 +25,7 @@ use crate::ram::Ram;
 /// For the CPU, just exposes read and write interfaces for memory access.
 pub struct SystemBus {
     // Owned memories
+    scratchpad: Scratchpad,
     bios: Bios,
     ram: Ram,
 }
@@ -31,6 +33,7 @@ pub struct SystemBus {
 impl SystemBus {
     pub fn new(bios: Bios) -> Self {
         Self {
+            scratchpad: Scratchpad::new(),
             ram: Ram::new(),
             bios,
         }
@@ -73,11 +76,18 @@ macro_rules! bus_read {
         if let Some(offset) = RAM.contains(addr) {
             return $self.ram.$method(offset);
         }
+
         if let Some(offset) = BIOS.contains(addr) {
             return $self.bios.$method(offset);
         }
 
-        eprintln!("Unhandled read at {addr:#010x}");
+        if let Some(_) = SPU_REGISTERS.contains(addr) { return 0; }
+
+        if let Some(offset) = SCRATCHPAD.contains(addr) {
+            return $self.scratchpad.$method(offset);
+        }
+
+        // eprintln!("Unhandled read at {addr:#010x}");
         Default::default()
     }}
 }
@@ -90,14 +100,44 @@ macro_rules! bus_write {
             return $self.ram.$method(offset, $value);
         }
 
-        eprintln!("Unhandled write at {addr:#010x} with value {:#010x}", $value);
+        if let Some(_) = EXP2.contains(addr) {
+            // TODO exp2
+            return;
+        }
+
+        if let Some(offset) = SCRATCHPAD.contains(addr) {
+            return $self.scratchpad.$method(offset, $value);
+        }
+
+        // eprintln!("Unhandled write at {addr:#010x} with value {:#010x}", $value);
     }}
+}
+
+// Hardware registers
+impl SystemBus {
+    fn read_gpu_register(&self, offset: u32) -> u32 {
+        match offset {
+            0x4 => 0x1C00_0000, // GPU status register, bit 28 (ready) is always set for now
+            _ => {
+                eprintln!("Unhandled GPU register read at offset {offset:#010x}");
+                0
+            }
+        }
+    }
 }
 
 impl SystemBus {
     pub fn read8 (&self, addr: u32) -> u8 { bus_read!(self, addr, read8) }
     pub fn read16(&self, addr: u32) -> u16 { bus_read!(self, addr, read16) }
-    pub fn read32(&self, addr: u32) -> u32 { bus_read!(self, addr, read32) }
+    pub fn read32(&self, addr: u32) -> u32 {
+        let addr_masked = mask_region(addr);
+
+        if let Some(offset) = GPU_REGISTERS.contains(addr_masked) {
+            return self.read_gpu_register(offset);
+        }
+
+        bus_read!(self, addr, read32) 
+    }
 
     pub fn write8 (&mut self, addr: u32, value: u8) { bus_write!(self, addr, value, write8) }
     pub fn write16(&mut self, addr: u32, value: u16) { bus_write!(self, addr, value, write16) }
