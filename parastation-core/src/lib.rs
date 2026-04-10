@@ -13,11 +13,12 @@
 mod scratchpad;
 pub mod bios;
 mod ram;
+mod gpu;
+mod memory_map;
+mod system_bus;
 mod backend;
 mod cpu;
 mod interpreter;
-mod memory_map;
-mod system_bus;
 
 pub use backend::Backend;
 pub use interpreter::Interpreter;

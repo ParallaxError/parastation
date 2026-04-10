@@ -16,6 +16,7 @@ use crate::memory_map::*;
 use crate::bios::Bios;
 use crate::ram::Ram;
 use crate::scratchpad::Scratchpad;
+use crate::gpu::Gpu;
 
 /// Main pathway for all memory flow through the PS1 system, and owner of all hardware components. 
 /// All memory reads and writes from the CPU go through the system bus, which routes them to the
@@ -28,6 +29,7 @@ pub struct SystemBus {
     scratchpad: Scratchpad,
     bios: Bios,
     ram: Ram,
+    gpu: Gpu,
 }
 
 impl SystemBus {
@@ -36,6 +38,7 @@ impl SystemBus {
             scratchpad: Scratchpad::new(),
             ram: Ram::new(),
             bios,
+            gpu: Gpu::new(),
         }
     }
 }
@@ -116,13 +119,7 @@ macro_rules! bus_write {
 // Hardware registers
 impl SystemBus {
     fn read_gpu_register(&self, offset: u32) -> u32 {
-        match offset {
-            0x4 => 0x1C00_0000, // GPU status register, bit 28 (ready) is always set for now
-            _ => {
-                eprintln!("Unhandled GPU register read at offset {offset:#010x}");
-                0
-            }
-        }
+        self.gpu.read_register(offset)
     }
 }
 
