@@ -11,7 +11,7 @@
  */
 
 // Command GP0 0xE1: Draw mode setting
-pub struct DrawModeState {
+pub struct DrawMode {
     pub texture_base_x: u8, // N * 64 (in 64 halfword steps)
     pub texture_base_y: bool, // N * 256 (0 or 256, just a bit)
     pub semi_transparency: u8, // 0=B/2+F/2, 1=B+F, 2=B-F, 3=B+F/4
@@ -23,7 +23,7 @@ pub struct DrawModeState {
     pub textured_rectangle_flip_y: bool,
 }
 
-impl DrawModeState {
+impl DrawMode {
     fn new() -> Self {
         Self {
             texture_base_x: 0,
@@ -40,14 +40,14 @@ impl DrawModeState {
 }
 
 // Command GP0 0xE2: Texture window setting
-pub struct TextureWindowState {
+pub struct TextureWindow {
     pub texture_window_mask_x: u8, // N * 8 (in 8 pixel steps)
     pub texture_window_mask_y: u8, // N * 8 (in 8 pixel steps)
     pub texture_window_offset_x: u8, // N * 8 (in 8 pixel steps)
     pub texture_window_offset_y: u8, // N * 8 (in 8 pixel steps)
 }
 
-impl TextureWindowState {
+impl TextureWindow {
     fn new() -> Self {
         Self {
             texture_window_mask_x: 0,
@@ -59,27 +59,31 @@ impl TextureWindowState {
 }
 
 // Command GP0 0xE3/0xE4: Drawing area setting
-pub struct DrawingAreaState {
-    pub drawing_area_x: u16,
-    pub drawing_area_y: u16,
+pub struct DrawingArea {
+    pub x1: u16,
+    pub y1: u16,
+    pub x2: u16,
+    pub y2: u16
 }
 
-impl DrawingAreaState {
+impl DrawingArea {
     fn new() -> Self {
         Self {
-            drawing_area_x: 0,
-            drawing_area_y: 0,
+            x1: 0,
+            y1: 0,
+            x2: 0,
+            y2: 0,
         }
     }
 }
 
 // Command GP0 0xE5: Drawing offset setting
-pub struct DrawingOffsetState {
+pub struct DrawingOffset {
     pub drawing_offset_x: i16,
     pub drawing_offset_y: i16,
 }
 
-impl DrawingOffsetState {
+impl DrawingOffset {
     fn new() -> Self {
         Self {
             drawing_offset_x: 0,
@@ -89,12 +93,12 @@ impl DrawingOffsetState {
 }
 
 // Command GP0 0xE6: Mask setting
-pub struct MaskState {
+pub struct Mask {
     pub set_mask_while_drawing: bool,
     pub check_mask_before_draw: bool,
 }
 
-impl MaskState {
+impl Mask {
     fn new() -> Self {
         Self {
             set_mask_while_drawing: false,
@@ -123,7 +127,7 @@ pub struct DisplayState {
     pub horizontal_resolution_2: bool, // (0=256/320/512/640, 1=368)
     pub reverseflag: bool, // (0=Normal, 1=Distorted?)
 
-    pub texture_disable: bool, // (0=Off, 1=On): GP1 0x09h
+    pub texture_disable_allowed: bool, // (0=Off, 1=On): GP1 0x09h
 }
 
 impl DisplayState {
@@ -144,23 +148,21 @@ impl DisplayState {
             vertical_interlace: false,
             horizontal_resolution_2: false,
             reverseflag: false,
-            texture_disable: false,
+            texture_disable_allowed: false,
         }
     }
 }
 
-/// GPU state encapsulation struct. Holds all stateful registers on the PS1 GPU, and provides
-/// an interface to access them with GP0/GP1 commands as well as providing the 32 bit status 
-/// register value.
+/// GPU state encapsulation struct. Holds all stateful registers on the PS1 GPU
 pub struct GpuState {
     pub irq: bool, // GPU interrupt request flag (GP0 0x1F/GP1 0x02)
 
-    pub draw_mode: DrawModeState,
-    pub texture_window: TextureWindowState,
-    pub drawing_area: DrawingAreaState,
-    pub drawing_offset: DrawingOffsetState,
-    pub mask: MaskState,
-    pub display: DisplayState,
+    pub draw_mode: DrawMode,
+    pub texture_window: TextureWindow,
+    pub drawing_area: DrawingArea,
+    pub drawing_offset: DrawingOffset,
+    pub mask: Mask,
+    pub display_state: DisplayState,
 }
 
 impl GpuState {
@@ -168,12 +170,12 @@ impl GpuState {
         Self {
             irq: false,
 
-            draw_mode: DrawModeState::new(),
-            texture_window: TextureWindowState::new(),
-            drawing_area: DrawingAreaState::new(),
-            drawing_offset: DrawingOffsetState::new(),
-            mask: MaskState::new(),
-            display: DisplayState::new(),
+            draw_mode: DrawMode::new(),
+            texture_window: TextureWindow::new(),
+            drawing_area: DrawingArea::new(),
+            drawing_offset: DrawingOffset::new(),
+            mask: Mask::new(),
+            display_state: DisplayState::new(),
         }
     }
 }

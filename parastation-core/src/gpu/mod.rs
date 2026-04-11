@@ -9,7 +9,10 @@
 
 // Imports
 mod gpu_state;
-pub use gpu_state::GpuState;
+use gpu_state::GpuState;
+mod rendering_parameters;
+pub mod backend;
+pub use backend::GpuBackend;
 
 /// Encapsulates the state and functionality of the PS1 GPU.
 /// 
@@ -17,16 +20,18 @@ pub use gpu_state::GpuState;
 /// that draws to the desired output (e.g. a window or a framebuffer)
 pub struct Gpu {
     state: GpuState,
-    
+    backend: Box<dyn GpuBackend>,
+
     // GP0 command accumulation
     gp0_buffer: Vec<u32>,
     gp0_words_remaining: u32,
 }
 
 impl Gpu {
-    pub fn new() -> Self {
+    pub fn new(backend: Box<dyn GpuBackend>) -> Self {
         Self {
             state: GpuState::new(),
+            backend,
 
             gp0_buffer: Vec::new(),
             gp0_words_remaining: 0,
@@ -70,27 +75,27 @@ impl Gpu {
         status |= (self.state.mask.check_mask_before_draw as u32) << 12;
 
         // Bit 13: interlace (display)
-        status |= (self.state.display.vertical_interlace as u32) << 13;
+        status |= (self.state.display_state.vertical_interlace as u32) << 13;
         // Bit 14: Reverseflag (display)
-        status |= (self.state.display.reverseflag as u32) << 14;
+        status |= (self.state.display_state.reverseflag as u32) << 14;
         
         // Bit 15: texture disable (draw mode)
-        status |= (self.state.draw_mode.texture_disable as u32) << 15;
+        status |= (((self.state.draw_mode.texture_disable) && (self.state.display_state.texture_disable_allowed)) as u32) << 15;
 
         // Bit 16: horizontal resolution 2 (dplsay)
-        status |= (self.state.display.horizontal_resolution_2 as u32) << 16;
+        status |= (self.state.display_state.horizontal_resolution_2 as u32) << 16;
         // Bit 17-18: horizontal resolution 1 (display)
-        status |= (self.state.display.horizontal_resolution_1 as u32) << 17;
+        status |= (self.state.display_state.horizontal_resolution_1 as u32) << 17;
         // Bit 19: vertical resolution (display)
-        status |= (self.state.display.vertical_resolution as u32) << 19;
+        status |= (self.state.display_state.vertical_resolution as u32) << 19;
         // Bit 20: video mode (display)
-        status |= (self.state.display.video_mode as u32) << 20;
+        status |= (self.state.display_state.video_mode as u32) << 20;
         // Bit 21: display colour depth (display)
-        status |= (self.state.display.display_colour_depth as u32) << 21;
+        status |= (self.state.display_state.display_colour_depth as u32) << 21;
         // Bit 22: vertical interlace (display)
-        status |= (self.state.display.vertical_interlace as u32) << 22;
+        status |= (self.state.display_state.vertical_interlace as u32) << 22;
         // Bit 23: display enable (display)
-        status |= (self.state.display.display_enable as u32) << 23;
+        status |= (self.state.display_state.display_enable as u32) << 23;
 
         // Bit 24: IRQ
         status |= (self.state.irq as u32) << 24;
@@ -99,7 +104,7 @@ impl Gpu {
         status |= 0xF << 25;
 
         // Bit 29-30: DMA direction (display)
-        status |= (self.state.display.dma_direction as u32) << 29;
+        status |= (self.state.display_state.dma_direction as u32) << 29;
 
         // Bit 31: drawing even/odd lines in interlace mode (just stub 0), so nothing to do
         status

@@ -25,6 +25,7 @@ pub use interpreter::Interpreter;
 pub use system_bus::SystemBus;
 pub use bios::Bios;
 pub use cpu::{Cpu, MipsRegister};
+pub use gpu::GpuBackend;
 
 /// Top-level PS1 struct, encapsulating the entire emulator state (CPU, memory, etc.)
 pub struct Ps1<B: Backend> {
@@ -34,11 +35,11 @@ pub struct Ps1<B: Backend> {
 }
 
 impl<B: Backend> Ps1<B> {
-    pub fn new(bios: Bios, backend: B) -> Self {
+    pub fn new(bios: Bios, instruction_backend: B, gpu_backend: Box<dyn GpuBackend>) -> Self {
         Self {
             cpu: Cpu::new(),
-            bus: SystemBus::new(bios),
-            backend,
+            bus: SystemBus::new(bios, gpu_backend),
+            backend: instruction_backend,
         }
     }
 

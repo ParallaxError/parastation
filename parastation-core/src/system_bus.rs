@@ -16,7 +16,7 @@ use crate::memory_map::*;
 use crate::bios::Bios;
 use crate::ram::Ram;
 use crate::scratchpad::Scratchpad;
-use crate::gpu::Gpu;
+use crate::gpu::{Gpu, GpuBackend};
 
 /// Main pathway for all memory flow through the PS1 system, and owner of all hardware components. 
 /// All memory reads and writes from the CPU go through the system bus, which routes them to the
@@ -33,12 +33,12 @@ pub struct SystemBus {
 }
 
 impl SystemBus {
-    pub fn new(bios: Bios) -> Self {
+    pub fn new(bios: Bios, gpu_backend: Box<dyn GpuBackend>) -> Self {
         Self {
             scratchpad: Scratchpad::new(),
             ram: Ram::new(),
             bios,
-            gpu: Gpu::new(),
+            gpu: Gpu::new(gpu_backend),
         }
     }
 }
