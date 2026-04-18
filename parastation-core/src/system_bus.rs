@@ -121,6 +121,10 @@ impl SystemBus {
     fn read_gpu_register(&self, offset: u32) -> u32 {
         self.gpu.read_register(offset)
     }
+
+    fn write_gpu_register(&mut self, offset: u32, value: u32) {
+        self.gpu.write_register(offset, value);
+    }
 }
 
 impl SystemBus {
@@ -138,5 +142,14 @@ impl SystemBus {
 
     pub fn write8 (&mut self, addr: u32, value: u8) { bus_write!(self, addr, value, write8) }
     pub fn write16(&mut self, addr: u32, value: u16) { bus_write!(self, addr, value, write16) }
-    pub fn write32(&mut self, addr: u32, value: u32) { bus_write!(self, addr, value, write32) }
+    pub fn write32(&mut self, addr: u32, value: u32) { 
+        let addr_masked = mask_region(addr);
+
+        if let Some(offset) = GPU_REGISTERS.contains(addr_masked) {
+            self.write_gpu_register(offset, value);
+            return;
+        }
+
+        bus_write!(self, addr, value, write32) 
+    }
 }

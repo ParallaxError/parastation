@@ -1,3 +1,6 @@
+mod dummy_gpu_backend; 
+use dummy_gpu_backend::DummyGpuBackend;
+
 use parastation_core::{Ps1, Interpreter};
 use parastation_core::bios::Bios;
 use std::env;
@@ -14,7 +17,8 @@ fn main() {
         std::process::exit(1);
     });
 
-    let mut ps1 = Ps1::new(bios, Interpreter::new());
+    let backend = Box::new(DummyGpuBackend::new());
+    let mut ps1 = Ps1::new(bios, Interpreter::new(), backend);
 
     // Run some bios
     ps1.run_until_pc(0x80030000);

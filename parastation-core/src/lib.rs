@@ -13,7 +13,7 @@
 mod scratchpad;
 pub mod bios;
 mod ram;
-mod gpu;
+pub mod gpu;
 mod memory_map;
 mod system_bus;
 mod backend;

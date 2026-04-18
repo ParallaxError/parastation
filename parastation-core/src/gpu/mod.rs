@@ -10,9 +10,13 @@
 // Imports
 mod gpu_state;
 use gpu_state::GpuState;
+pub use gpu_state::Mask;
 mod rendering_parameters;
+pub use rendering_parameters::{Colour, DrawParams, Line, Polygon, Rect, Vertex};
 pub mod backend;
 pub use backend::GpuBackend;
+mod gpu_commands;
+pub use gpu_commands::*;
 
 /// Encapsulates the state and functionality of the PS1 GPU.
 /// 
@@ -108,5 +112,46 @@ impl Gpu {
 
         // Bit 31: drawing even/odd lines in interlace mode (just stub 0), so nothing to do
         status
+    }
+}
+
+// GP0 command handling and dispatch
+impl Gpu {
+    fn write_gp0(&mut self, word: u32) {
+        // First, are we currently accumulating a command?
+        if self.gp0_words_remaining > 0 {
+            // Yes, so add this word to the buffer and decrease the count
+            self.gp0_buffer.push(word);
+            self.gp0_words_remaining -= 1;
+        } else {
+            // No, so this word is a new command. Decode it and set up the buffer and count.
+            let command = decode_gp0_command(word);
+            self.gp0_buffer.clear();
+            self.gp0_buffer.push(word);
+            self.gp0_words_remaining = gp0_command_parameter_count(&command) as u32;
+        }
+
+        // If we're done accumulating a command, execute it
+        if self.gp0_words_remaining == 0 {
+            let command = decode_gp0_command(self.gp0_buffer[0]);
+            self.execute_gp0_command(command);
+        }
+    }
+    
+    fn execute_gp0_command(&mut self, command: Gp0Command) {
+        match command {
+            _ => eprintln!("GP0 command execution not implemented: {:?}", command),
+        }
+    }
+}
+
+// Register writes
+impl Gpu {
+    pub fn write_register(&mut self, offset: u32, value: u32) {
+        match offset {
+            0x00 => self.write_gp0(value),
+            0x04 => eprintln!("GP1 write"),
+            _ => panic!("Invalid GPU register write offset: 0x{:02X}", offset)
+        }
     }
 }
