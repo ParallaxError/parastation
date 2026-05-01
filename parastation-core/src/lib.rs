@@ -99,4 +99,9 @@ impl<B: Backend> Ps1<B> {
             }
         }
     }
+
+    /// Display the current framebuffer.
+    pub fn display(&mut self) {
+        self.bus.gpu.display();
+    }
 }

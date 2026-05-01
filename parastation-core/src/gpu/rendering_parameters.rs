@@ -19,6 +19,10 @@ pub struct Colour {
 }
 
 impl Colour {
+    fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
+
     pub fn from_word(word: u32) -> Self {
         Self {
             r: (word & 0xFF) as u8,
@@ -51,6 +55,7 @@ impl Vertex {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 /// Texture page attribute embedded in polygon commands
 pub struct TexPageAttr {
     pub x: u8,
@@ -89,6 +94,7 @@ impl Texcoord {
 }
 
 /// The palette for 4/8 bit textures, encoded as a colour look up table
+#[derive(Debug)]
 pub struct Clut {
     pub x: u8,
     pub y: u16,
@@ -105,23 +111,27 @@ impl Clut {
 
 // Polygon drawing parameters
 /// Vertex for monochrome flat-shaded polygons
+#[derive(Debug)]
 pub struct FlatVertex {
     pub vertex: Vertex,
 }
 
 /// Vertex for shaded polygons
+#[derive(Debug)]
 pub struct ShadedVertex {
     pub vertex: Vertex,
     pub colour: Colour,
 }
 
 /// Vertex for textured polygons
+#[derive(Debug)]
 pub struct TexturedVertex {
     pub vertex: Vertex,
     pub texcoord: Texcoord,
 }
 
 /// Vertex for textured and shaded polygons
+#[derive(Debug)]
 pub struct ShadedTexturedVertex {
     pub vertex: Vertex,
     pub colour: Colour,
@@ -130,12 +140,14 @@ pub struct ShadedTexturedVertex {
 
 /// Represents the vertices of a primitive polygon to be drawn, either a tri or a quad.
 /// Quads are internally broken down into two triangles by the backend on the original PS1 hardware
+#[derive(Debug)]
 pub enum PolygonVertices<V> {
     Tri(V, V, V),
     Quad(V, V, V, V),
 }
 
 /// Represents the texture parameters for a textured polygon, one per polygon
+#[derive(Debug)]
 pub struct TextureParams {
     pub clut: Clut,
     pub tex_page: TexPageAttr,
@@ -144,6 +156,7 @@ pub struct TextureParams {
 
 /// A polygon that can be drawn by the GPU, with all the necessary parameters for rendering, 
 /// including vertices and texture information
+#[derive(Debug)]
 pub enum Polygon {
     Monochrome {
         colour: Colour,
@@ -172,11 +185,13 @@ pub enum Polygon {
 
 // Line drawing parameters
 /// Represents a point for monochrome line drawing, with a vertex
+#[derive(Debug)]
 pub struct LinePoint {
     pub vertex: Vertex,
 }
 
 /// Represents a point for coloured line drawing, with a vertex and colour
+#[derive(Debug)]
 pub struct ColouredLinePoint {
     pub vertex: Vertex,
     pub colour: Colour,
@@ -184,6 +199,7 @@ pub struct ColouredLinePoint {
 
 /// A line that can be drawn by the GPU, with all the necessary parameters for rendering,
 /// including vertices and colour information
+#[derive(Debug)]
 pub enum Line {
     Monochrome {
         vertices: Vec<LinePoint>,
@@ -198,6 +214,7 @@ pub enum Line {
 
 /// Represents the size of a rectangle to be drawn, either variable or fixed sizes of 1x1, 8x8, or 
 /// 16x16
+#[derive(Debug)]
 pub enum RectSize {
     Variable { w: u16, h: u16 },
     Fixed1x1,
@@ -207,6 +224,7 @@ pub enum RectSize {
 
 /// A rectangle that can be drawn by the GPU, with all the necessary parameters for rendering, 
 /// including position, size, colour, and texture information
+#[derive(Debug)]
 pub enum Rect {
     Monochrome {
         colour:            Colour,
@@ -227,6 +245,7 @@ pub enum Rect {
 }
 
 /// The subset of the GPU state to be passed to the backend for draw calls.
+#[derive(Debug)]
 pub struct DrawParams {
     pub drawing_area: DrawingArea,
     pub drawing_offset: DrawingOffset,

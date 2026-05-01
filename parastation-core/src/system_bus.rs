@@ -29,7 +29,7 @@ pub struct SystemBus {
     scratchpad: Scratchpad,
     bios: Bios,
     ram: Ram,
-    gpu: Gpu,
+    pub gpu: Gpu,
 }
 
 impl SystemBus {
@@ -90,7 +90,7 @@ macro_rules! bus_read {
             return $self.scratchpad.$method(offset);
         }
 
-        // eprintln!("Unhandled read at {addr:#010x}");
+        eprintln!("Unhandled read at {addr:#010x}");
         Default::default()
     }}
 }
@@ -112,7 +112,7 @@ macro_rules! bus_write {
             return $self.scratchpad.$method(offset, $value);
         }
 
-        // eprintln!("Unhandled write at {addr:#010x} with value {:#010x}", $value);
+        eprintln!("Unhandled write at {addr:#010x} with value {:#010x}", $value);
     }}
 }
 

@@ -19,28 +19,29 @@ impl DummyGpuBackend {
 }
 
 impl GpuBackend for DummyGpuBackend {
-	fn draw_polygon(&mut self, _polygon: &Polygon, _params: &DrawParams) {
-		println!("draw_polygon");
+	fn draw_polygon(&mut self, polygon: &Polygon, params: &DrawParams) {
+		println!("draw_polygon: {:#?}\nparams: {:#?}", polygon, params);
 	}
 
-	fn draw_line(&mut self, _line: &Line, _params: &DrawParams) {
-		println!("draw_line");
+	fn draw_line(&mut self, line: &Line, params: &DrawParams) {
+		println!("draw_line: {:#?}\nparams: {:#?}", line, params);
 	}
 
-	fn draw_rect(&mut self, _rect: &Rect, _params: &DrawParams) {
+	fn draw_rect(&mut self, rect: &Rect, params: &DrawParams) {
+		// println!("draw_rect: {:#?}\nparams: {:#?}", rect, params);
 		println!("draw_rect");
 	}
 
-	fn fill_rect(&mut self, _pos: Vertex, _w: u16, _h: u16, _colour: Colour) {
-		println!("fill_rect");
+	fn fill_rect(&mut self, pos: Vertex, w: u16, h: u16, colour: Colour) {
+		println!("fill_rect: {:#?}, w: {}, h: {}, colour: {:#?}", pos, w, h, colour);
 	}
 
-	fn copy_rect(&mut self, _src_x: u16, _src_y: u16, _dst_x: u16, _dst_y: u16, _w: u16, _h: u16, _mask: &Mask) {
-		println!("copy_rect");
+	fn copy_rect(&mut self, src_x: u16, src_y: u16, dst_x: u16, dst_y: u16, w: u16, h: u16, mask: &Mask) {
+		println!("copy_rect: src_x: {}, src_y: {}, dst_x: {}, dst_y: {}, w: {}, h: {}, mask: {:#?}", src_x, src_y, dst_x, dst_y, w, h, mask);
 	}
 
-	fn vram_read_begin(&mut self, _vram_x: u16, _vram_y: u16, _w: u16, _h: u16) {
-		println!("vram_read_begin");
+	fn vram_read_begin(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16) {
+		println!("vram_read_begin: {}, {}, {}, {}", vram_x, vram_y, w, h);
 	}
 
 	fn vram_read(&mut self) -> Option<u32> {
@@ -48,15 +49,15 @@ impl GpuBackend for DummyGpuBackend {
 		None
 	}
 
-	fn vram_write_begin(&mut self, _vram_x: u16, _vram_y: u16, _w: u16, _h: u16, _mask: &Mask) {
-		println!("vram_write_begin");
+	fn vram_write_begin(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16, mask: &Mask) {
+		println!("vram_write_begin: {}, {}, {}, {}, {:#?}", vram_x, vram_y, w, h, mask);
 	}
 
-	fn vram_write(&mut self, _word: u32) {
-		println!("vram_write");
+	fn vram_write(&mut self, word: u32) {
+		println!("vram_write: {:#?}", word);
 	}
-
-	fn present(&mut self, _vram_x: u16, _vram_y: u16, _w: u16, _h: u16) {
-		println!("present");
+	
+	fn present(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16) {
+		// println!("present: {}, {}", vram_x, vram_y);
 	}
 }

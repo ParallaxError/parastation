@@ -10,172 +10,209 @@
  * -----
  */
 
-// Command GP0 0xE1: Draw mode setting
+/// Draw mode state set by GP0(E1h)
+#[derive(Debug, Clone, Default)]
 pub struct DrawMode {
-    pub texture_base_x: u8, // N * 64 (in 64 halfword steps)
-    pub texture_base_y: bool, // N * 256 (0 or 256, just a bit)
-    pub semi_transparency: u8, // 0=B/2+F/2, 1=B+F, 2=B-F, 3=B+F/4
-    pub texture_page_colours: u8, // (0=4bit, 1=8bit, 2=15bit, 3=Reserved)
-    pub dither: bool, // 0=Off, 1=On
-    pub draw_to_display: bool, // 0=Prohibited, 1=Allowed
-    pub texture_disable: bool, // 0=Off, 1=On
+    pub texture_base_x: u8,
+    pub texture_base_y: bool,
+    pub semi_transparency: u8,
+    pub texture_page_colours: u8,
+    pub dither: bool,
+    pub draw_to_display: bool,
+    pub texture_disable: bool,
     pub textured_rectangle_flip_x: bool,
     pub textured_rectangle_flip_y: bool,
 }
 
 impl DrawMode {
-    fn new() -> Self {
+    pub fn from_gp0_command(command: u32) -> Self {
+        /*
+        0-3   Texture page X Base   (N*64) (ie. in 64-halfword steps)    ;GPUSTAT.0-3
+        4     Texture page Y Base   (N*256) (ie. 0 or 256)               ;GPUSTAT.4
+        5-6   Semi Transparency     (0=B/2+F/2, 1=B+F, 2=B-F, 3=B+F/4)   ;GPUSTAT.5-6
+        7-8   Texture page colors   (0=4bit, 1=8bit, 2=15bit, 3=Reserved);GPUSTAT.7-8
+        9     Dither 24bit to 15bit (0=Off/strip LSBs, 1=Dither Enabled) ;GPUSTAT.9
+        10    Drawing to display area (0=Prohibited, 1=Allowed)          ;GPUSTAT.10
+        11    Texture Disable (0=Normal, 1=Disable if GP1(09h).Bit0=1)   ;GPUSTAT.15
+        12    Textured Rectangle X-Flip
+        13    Textured Rectangle Y-Flip
+        14-23 Not used (should be 0)
+        24-31 Command  (E1h)
+        */
         Self {
-            texture_base_x: 0,
-            texture_base_y: false,
-            semi_transparency: 0,
-            texture_page_colours: 0,
-            dither: false,
-            draw_to_display: false,
-            texture_disable: false,
-            textured_rectangle_flip_x: false,
-            textured_rectangle_flip_y: false,
+            texture_base_x:             ((command >> 0) & 0xF) as u8,
+            texture_base_y:             ((command >> 4) & 0x1) != 0,
+            semi_transparency:          ((command >> 5) & 0x3) as u8,
+            texture_page_colours:       ((command >> 7) & 0x3) as u8,
+            dither:                     ((command >> 9) & 0x1) != 0,
+            draw_to_display:            ((command >> 10) & 0x1) != 0,
+            texture_disable:            ((command >> 11) & 0x1) != 0,
+            textured_rectangle_flip_x:  ((command >> 12) & 0x1) != 0,
+            textured_rectangle_flip_y:  ((command >> 13) & 0x1) != 0,
         }
     }
 }
 
-// Command GP0 0xE2: Texture window setting
+/// Texture window setting set by GP0(E2h)
+#[derive(Debug, Clone, Default)]
 pub struct TextureWindow {
-    pub texture_window_mask_x: u8, // N * 8 (in 8 pixel steps)
-    pub texture_window_mask_y: u8, // N * 8 (in 8 pixel steps)
-    pub texture_window_offset_x: u8, // N * 8 (in 8 pixel steps)
-    pub texture_window_offset_y: u8, // N * 8 (in 8 pixel steps)
+    pub texture_window_mask_x: u8,
+    pub texture_window_mask_y: u8,
+    pub texture_window_offset_x: u8,
+    pub texture_window_offset_y: u8,
 }
 
 impl TextureWindow {
-    fn new() -> Self {
+    pub fn from_gp0_command(command: u32) -> Self {
+        /*
+        0-4    Texture window Mask X   (in 8 pixel steps)
+        5-9    Texture window Mask Y   (in 8 pixel steps)
+        10-14  Texture window Offset X (in 8 pixel steps)
+        15-19  Texture window Offset Y (in 8 pixel steps)
+        20-23  Not used (zero)
+        24-31  Command  (E2h)
+        */
         Self {
-            texture_window_mask_x: 0,
-            texture_window_mask_y: 0,
-            texture_window_offset_x: 0,
-            texture_window_offset_y: 0,
+            texture_window_mask_x:    ((command >> 0)  & 0x1F) as u8,
+            texture_window_mask_y:    ((command >> 5)  & 0x1F) as u8,
+            texture_window_offset_x:  ((command >> 10) & 0x1F) as u8,
+            texture_window_offset_y:  ((command >> 15) & 0x1F) as u8,
         }
     }
 }
 
-// Command GP0 0xE3/0xE4: Drawing area setting
+/// Drawing area corners set by GP0(E3h) and GP0(E4h)
+#[derive(Debug, Clone, Default)]
 pub struct DrawingArea {
     pub x1: u16,
     pub y1: u16,
     pub x2: u16,
-    pub y2: u16
+    pub y2: u16,
 }
 
 impl DrawingArea {
-    fn new() -> Self {
-        Self {
-            x1: 0,
-            y1: 0,
-            x2: 0,
-            y2: 0,
-        }
+    /*
+    0-9    X-coordinate (0..1023)
+    10-18  Y-coordinate (0..511) on retail 1MB VRAM consoles
+    24-31  Command (Exh)
+    */
+    pub fn set_top_left(&mut self, command: u32) {
+        self.x1 = (command & 0x3FF) as u16;
+        self.y1 = ((command >> 10) & 0x1FF) as u16;
+    }
+
+    pub fn set_bottom_right(&mut self, command: u32) {
+        self.x2 = (command & 0x3FF) as u16;
+        self.y2 = ((command >> 10) & 0x1FF) as u16;
     }
 }
 
-// Command GP0 0xE5: Drawing offset setting
+/// Drawing offset set by GP0(E5h)
+#[derive(Debug, Clone, Default)]
 pub struct DrawingOffset {
-    pub drawing_offset_x: i16,
-    pub drawing_offset_y: i16,
+    pub x: i16,
+    pub y: i16,
 }
 
 impl DrawingOffset {
-    fn new() -> Self {
+    pub fn from_gp0_command(command: u32) -> Self {
+        /*
+        0-10   X-offset (-1024..+1023)
+        11-21  Y-offset (-1024..+1023)
+        22-23  Not used (zero)
+        24-31  Command  (E5h)
+        */
         Self {
-            drawing_offset_x: 0,
-            drawing_offset_y: 0,
+            x: ((command as i32) << 22 >> 22) as i16,
+            y: (((command >> 11) as i32) << 21 >> 21) as i16,
         }
     }
 }
 
-// Command GP0 0xE6: Mask setting
+/// Mask bit setting set by GP0(E6h)
+#[derive(Debug, Clone, Default)]
 pub struct Mask {
     pub set_mask_while_drawing: bool,
     pub check_mask_before_draw: bool,
 }
 
 impl Mask {
-    fn new() -> Self {
+    pub fn from_gp0_command(command: u32) -> Self {
+        /*
+        0     Set mask while drawing (0=TextureBit15, 1=ForceBit15=1)   ;GPUSTAT.11
+        1     Check mask before draw (0=Draw Always, 1=Draw if Bit15=0) ;GPUSTAT.12
+        2-23  Not used (zero)
+        24-31 Command  (E6h)
+        */
         Self {
-            set_mask_while_drawing: false,
-            check_mask_before_draw: false,
+            set_mask_while_drawing: (command & 0x1) != 0,
+            check_mask_before_draw: ((command >> 1) & 0x1) != 0,
         }
     }
 }
 
-// GP1 state (Display settings)
+/// Display state set by GP1 commands
+#[derive(Debug, Clone)]
 pub struct DisplayState {
-    pub display_enable: bool, // (0=Off, 1=On): GP1 0x03h
-    pub dma_direction: u8, // (0=Off, 1=FIFO, 2=CPUtoGP0, 3=GPUREADtoCPU): GP1 0x04h
-    pub display_start_x: u16, // (0-1023), GP1 0x05h
-    pub display_start_y: u16, // (0-511), GP1 0x05h
-    pub horizontal_range_x1: u16, // (12bit), GP1 0x06h
-    pub horizontal_range_x2: u16, // (12bit), GP1 0x06h
-    pub vertical_range_y1: u16, // GP1 0x07h
-    pub vertical_range_y2: u16, // GP1 0x07h
-
-    // Display mode (GP1 0x08h)
-    pub horizontal_resolution_1: u8, // (0=256, 1=320, 2=512, 3=640)
-    pub vertical_resolution: bool, // (0=240, 1=480 when Bit5=1?)
-    pub video_mode: bool, // (0=NTSC, 1=PAL)
-    pub display_colour_depth: bool, // (0=15bit, 1=24bit)
+    pub display_enable: bool,
+    pub dma_direction: u8,
+    pub display_start_x: u16,
+    pub display_start_y: u16,
+    pub horizontal_range_x1: u16,
+    pub horizontal_range_x2: u16,
+    pub vertical_range_y1: u16,
+    pub vertical_range_y2: u16,
+    pub horizontal_resolution_1: u8,
+    pub vertical_resolution: bool,
+    pub video_mode: bool,
+    pub display_colour_depth: bool,
     pub vertical_interlace: bool,
-    pub horizontal_resolution_2: bool, // (0=256/320/512/640, 1=368)
-    pub reverseflag: bool, // (0=Normal, 1=Distorted?)
-
-    pub texture_disable_allowed: bool, // (0=Off, 1=On): GP1 0x09h
+    pub horizontal_resolution_2: bool,
+    pub reverseflag: bool,
+    pub texture_disable_allowed: bool, // NOT reset by GP1(00h)
 }
 
-impl DisplayState {
-    fn new() -> Self {
+impl Default for DisplayState {
+    fn default() -> Self {
+        // Reset values per GP1(00h) spec
         Self {
-            display_enable: false,
-            dma_direction: 0,
-            display_start_x: 0,
-            display_start_y: 0,
-            horizontal_range_x1: 0,
-            horizontal_range_x2: 0,
-            vertical_range_y1: 0,
-            vertical_range_y2: 0,
+            display_enable:          false,
+            dma_direction:           0,
+            display_start_x:         0,
+            display_start_y:         0,
+            horizontal_range_x1:     0x200,
+            horizontal_range_x2:     0x200 + 256 * 10,
+            vertical_range_y1:       0x010,
+            vertical_range_y2:       0x010 + 240,
             horizontal_resolution_1: 0,
-            vertical_resolution: false,
-            video_mode: false,
-            display_colour_depth: false,
-            vertical_interlace: false,
+            vertical_resolution:     false,
+            video_mode:              false,
+            display_colour_depth:    false,
+            vertical_interlace:      false,
             horizontal_resolution_2: false,
-            reverseflag: false,
+            reverseflag:             false,
             texture_disable_allowed: false,
         }
     }
 }
 
-/// GPU state encapsulation struct. Holds all stateful registers on the PS1 GPU
+/// GPU state encapsulation struct. Holds all stateful registers on the PS1 GPU.
+#[derive(Debug, Clone, Default)]
 pub struct GpuState {
-    pub irq: bool, // GPU interrupt request flag (GP0 0x1F/GP1 0x02)
-
-    pub draw_mode: DrawMode,
-    pub texture_window: TextureWindow,
-    pub drawing_area: DrawingArea,
-    pub drawing_offset: DrawingOffset,
-    pub mask: Mask,
-    pub display_state: DisplayState,
+    pub irq:             bool,
+    pub draw_mode:       DrawMode,
+    pub texture_window:  TextureWindow,
+    pub drawing_area:    DrawingArea,
+    pub drawing_offset:  DrawingOffset,
+    pub mask:            Mask,
+    pub display_state:   DisplayState,
 }
 
+/// Reset GPU state per GP1(00h), preserving texture_disable_allowed per spec
 impl GpuState {
-    pub fn new() -> Self {
-        Self {
-            irq: false,
-
-            draw_mode: DrawMode::new(),
-            texture_window: TextureWindow::new(),
-            drawing_area: DrawingArea::new(),
-            drawing_offset: DrawingOffset::new(),
-            mask: Mask::new(),
-            display_state: DisplayState::new(),
-        }
+    pub fn reset(&mut self) {
+        let texture_disable_allowed = self.display_state.texture_disable_allowed;
+        *self = Self::default();
+        self.display_state.texture_disable_allowed = texture_disable_allowed;
     }
 }

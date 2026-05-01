@@ -9,10 +9,10 @@
 
 // Imports
 mod gpu_state;
-use gpu_state::GpuState;
+use gpu_state::{GpuState, DrawMode, TextureWindow, DrawingOffset};
 pub use gpu_state::Mask;
 mod rendering_parameters;
-pub use rendering_parameters::{Colour, DrawParams, Line, Polygon, Rect, Vertex};
+pub use rendering_parameters::*;
 pub mod backend;
 pub use backend::GpuBackend;
 mod gpu_commands;
@@ -34,7 +34,7 @@ pub struct Gpu {
 impl Gpu {
     pub fn new(backend: Box<dyn GpuBackend>) -> Self {
         Self {
-            state: GpuState::new(),
+            state: GpuState::default(),
             backend,
 
             gp0_buffer: Vec::new(),
@@ -135,13 +135,118 @@ impl Gpu {
         if self.gp0_words_remaining == 0 {
             let command = decode_gp0_command(self.gp0_buffer[0]);
             self.execute_gp0_command(command);
+
+            // TODO should present with an interrupt, not unconditionally
+            // self.display();
         }
     }
     
     fn execute_gp0_command(&mut self, command: Gp0Command) {
         match command {
+            Gp0Command::MonochromeRectangle => self.draw_monochrome_rectangle(),
+
+            Gp0Command::SetRenderingAttribute => self.set_rendering_attribute(),
             _ => eprintln!("GP0 command execution not implemented: {:?}", command),
         }
+    }
+}
+
+// GP0 control commands
+impl Gpu {
+    fn set_rendering_attribute(&mut self) {
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        match cmd {
+            0xE1 => self.state.draw_mode = DrawMode::from_gp0_command(self.gp0_buffer[0]),
+            0xE2 => self.state.texture_window = TextureWindow::from_gp0_command(self.gp0_buffer[0]),
+            0xE3 => self.state.drawing_area.set_top_left(self.gp0_buffer[0]),
+            0xE4 => self.state.drawing_area.set_bottom_right(self.gp0_buffer[0]),
+            0xE5 => self.state.drawing_offset = DrawingOffset::from_gp0_command(self.gp0_buffer[0]),
+            0xE6 => self.state.mask = Mask::from_gp0_command(self.gp0_buffer[0]),
+            _ => eprintln!("Unknown GP0 rendering attribute command: 0x{:02X}", cmd)
+        }
+    }
+}
+
+// GP0 drawing commands
+impl Gpu {
+    fn display_width(&self) -> u16 {
+        if self.state.display_state.horizontal_resolution_2 {
+            368
+        } else {
+            match self.state.display_state.horizontal_resolution_1 {
+                0 => 256,
+                1 => 320,
+                2 => 512,
+                3 => 640,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fn display_height(&self) -> u16 {
+        if self.state.display_state.vertical_resolution {
+            480
+        } else {
+            240
+        }
+    }
+
+    pub fn display(&mut self) {
+        self.backend.present(
+            self.state.display_state.display_start_x,
+            self.state.display_state.display_start_y,
+            self.display_width(),
+            self.display_height(),
+        );
+    }
+
+    fn get_draw_params(&self) -> DrawParams {
+        DrawParams {
+            drawing_area: self.state.drawing_area.clone(),
+            drawing_offset: self.state.drawing_offset.clone(),
+            mask: self.state.mask.clone(),
+            draw_mode: self.state.draw_mode.clone(),
+            semi_transparency: self.state.draw_mode.semi_transparency,
+        }
+    }
+
+    fn draw_monochrome_rectangle(&mut self) {
+        /*
+        GP0(68h) - Monochrome Rectangle (1x1) (Dot) (opaque)
+        GP0(6Ah) - Monochrome Rectangle (1x1) (Dot) (semi-transparent)
+        GP0(70h) - Monochrome Rectangle (8x8) (opaque)
+        GP0(72h) - Monochrome Rectangle (8x8) (semi-transparent)
+        GP0(78h) - Monochrome Rectangle (16x16) (opaque)
+        GP0(7Ah) - Monochrome Rectangle (16x16) (semi-transparent)
+        1st  Color+Command     (CcBbGgRrh)
+        2nd  Vertex            (YyyyXxxxh) 
+         */
+
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour = Colour::from_word(self.gp0_buffer[0]);
+        let vertex = Vertex::from_word(self.gp0_buffer[1]);
+
+        let semi_transparent = match cmd {
+            0x68 | 0x70 | 0x78 => false,
+            0x6A | 0x72 | 0x7A => true,
+            _ => unreachable!(),
+        };
+
+        let size = match cmd {
+            0x68 | 0x6A => RectSize::Fixed1x1,
+            0x70 | 0x72 => RectSize::Fixed8x8,
+            0x78 | 0x7A => RectSize::Fixed16x16,
+            _ => unreachable!(),
+        };
+
+        let rect = Rect::Monochrome {
+            colour,
+            pos: vertex,
+            size: size,
+            semi_transparent: semi_transparent,
+        };
+
+        self.backend.draw_rect(&rect, &self.get_draw_params());
     }
 }
 
@@ -150,8 +255,84 @@ impl Gpu {
     pub fn write_register(&mut self, offset: u32, value: u32) {
         match offset {
             0x00 => self.write_gp0(value),
-            0x04 => eprintln!("GP1 write"),
+            0x04 => self.write_gp1(value),
             _ => panic!("Invalid GPU register write offset: 0x{:02X}", offset)
+        }
+    }
+
+    fn write_gp1(&mut self, word: u32) {
+        let command_id = (word >> 24) as u8;
+        match command_id {
+            // Reset GPU
+            0x00 => self.state.reset(),
+            // Reset command buffer
+            0x01 => { self.gp0_buffer.clear(); self.gp0_words_remaining = 0 },
+            // Display enable
+            0x03 => self.state.display_state.display_enable = (word & 0x1) != 0,
+            // Set VRAM start 
+            /* 
+            0-9   X (0-1023)    (halfword address in VRAM)  (relative to begin of VRAM)
+            10-18 Y (0-511)     (scanline number in VRAM)   (relative to begin of VRAM)
+            19-23 Not used (zero)
+             */
+            0x05 => {
+                let vram_x = (word & 0x3FF) as u16;
+                let vram_y = ((word >> 10) & 0x1FF) as u16;
+                self.state.display_state.display_start_x = vram_x;
+                self.state.display_state.display_start_y = vram_y;
+            },
+            // Horizontal display range
+            /*
+            0-11   X1 (260h+0)       ;12bit       ;\counted in 53.222400MHz units,
+            12-23  X2 (260h+320*8)   ;12bit       ;/relative to HSYNC
+             */
+            0x06 => {
+                let x1 = (word & 0xFFF) as u16;
+                let x2 = ((word >> 12) & 0xFFF) as u16;
+                self.state.display_state.horizontal_range_x1 = x1;
+                self.state.display_state.horizontal_range_x2 = x2;
+            },
+            // Vertical display range
+            /*
+            0-9   Y1 (NTSC=88h-(224/2), (PAL=A3h-(264/2))  ;\scanline numbers on screen,
+            10-19 Y2 (NTSC=88h+(224/2), (PAL=A3h+(264/2))  ;/relative to VSYNC
+            20-23 Not used (zero)
+             */
+            0x07 => {
+                let y1 = (word & 0x3FF) as u16;
+                let y2 = ((word >> 10) & 0x3FF) as u16;
+                self.state.display_state.vertical_range_y1 = y1;
+                self.state.display_state.vertical_range_y2 = y2;
+            },
+            // Display mode
+            /*
+            0-1   Horizontal Resolution 1     (0=256, 1=320, 2=512, 3=640) ;GPUSTAT.17-18
+            2     Vertical Resolution         (0=240, 1=480, when Bit5=1)  ;GPUSTAT.19
+            3     Video Mode                  (0=NTSC/60Hz, 1=PAL/50Hz)    ;GPUSTAT.20
+            4     Display Area Color Depth    (0=15bit, 1=24bit)           ;GPUSTAT.21
+            5     Vertical Interlace          (0=Off, 1=On)                ;GPUSTAT.22
+            6     Horizontal Resolution 2     (0=256/320/512/640, 1=368)   ;GPUSTAT.16
+            7     "Reverseflag"               (0=Normal, 1=Distorted)      ;GPUSTAT.14
+            8-23  Not used (zero)
+             */
+            0x08 => {
+                let horizontal_resolution_1 = ((word >> 2) & 0x3) as u8;
+                let vertical_resolution = ((word >> 2) & 0x1) != 0;
+                let video_mode = ((word >> 3) & 0x1) != 0;
+                let display_colour_depth = ((word >> 4) & 0x1) != 0;
+                let vertical_interlace = ((word >> 5) & 0x1) != 0;
+                let horizontal_resolution_2 = ((word >> 6) & 0x1) != 0;
+                let reverseflag = ((word >> 7) & 0x1) != 0;
+
+                self.state.display_state.horizontal_resolution_1 = horizontal_resolution_1;
+                self.state.display_state.vertical_resolution = vertical_resolution;
+                self.state.display_state.video_mode = video_mode;
+                self.state.display_state.display_colour_depth = display_colour_depth;
+                self.state.display_state.vertical_interlace = vertical_interlace;
+                self.state.display_state.horizontal_resolution_2 = horizontal_resolution_2;
+                self.state.display_state.reverseflag = reverseflag;
+            }
+            _ => eprintln!("GP1 command not implemented: 0x{:02X}", command_id)
         }
     }
 }

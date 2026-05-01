@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 parastation-core = { path = "../parastation-core" }
+winit = { version = "0.28", features = [] }
+pixels = "0.14"
