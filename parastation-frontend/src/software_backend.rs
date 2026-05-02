@@ -18,7 +18,7 @@ use parastation_core::gpu::{Colour, DrawParams, Line, Mask, Polygon, Rect, Verte
 pub struct SoftwareGpuBackend {
 	pixels: Pixels,
 	window: Window,
-    vram: Box<[u16; 1024 * 512]>, // 1024x512 pixels, 16 bits per pixel
+	vram: Box<[u16]>, // 1024x512 pixels, 16 bits per pixel
 }
 
 impl SoftwareGpuBackend {
@@ -47,7 +47,7 @@ impl SoftwareGpuBackend {
 		Self {
 			pixels,
 			window,
-        	vram: Box::new([0u16; 1024 * 512]),
+	        vram: vec![0u16; 1024 * 512].into_boxed_slice(),
         }
     }
 

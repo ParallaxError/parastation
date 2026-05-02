@@ -22,7 +22,7 @@ impl Range {
     /// subtracting the base. Otherwise, return None.
     #[inline(always)]
     pub fn contains(&self, addr: u32) -> Option<u32> {
-        if addr >= self.start && addr <= self.end {
+        if addr >= self.start && addr < self.end {
             Some(addr - self.start)
         } else {
             None
@@ -34,25 +34,27 @@ impl Range {
 // More or less from the guide since it exhaustively details the PS1 memory map
 
 // 2 MB of RAM, mirrored every 2 MB until 0x1FFF_FFFF
-pub const RAM: Range = Range { start: 0x0000_0000, end: 0x001F_FFFF };
+pub const RAM: Range = Range { start: 0x0000_0000, end: 0x0020_0000 };
 
 // Expansion region 1 (ROM/RAM), 8 MB
-pub const EXP1: Range = Range { start: 0x1F00_0000, end: 0x1F7F_FFFF };
+pub const EXP1: Range = Range { start: 0x1F00_0000, end: 0x1F80_0000 };
 
+// IO ports (8Kb), mapped at 0x1F00_0000
 // Scratchpad (data cache used as fast RAM), 1 KB
-pub const SCRATCHPAD: Range = Range { start: 0x1F80_0000, end: 0x1F80_03FF };
-
-// IO ports (8Kb), mapped at 0x1F80_1000\
-// GPU status
+pub const SCRATCHPAD: Range = Range { start: 0x1F80_0000, end: 0x1F80_0400 };
+pub const MEMORY_CONTROL_1: Range = Range { start: 0x1F80_1000, end: 0x1F80_1024 };
+pub const INTERRUPT_CONTROL: Range = Range { start: 0x1F80_1070, end: 0x1F80_1078 };
+pub const DMA_REGISTERS: Range = Range { start: 0x1F80_1080, end: 0x1F80_1100 };
+pub const TIMERS: Range = Range { start: 0x1F80_1100, end: 0x1F80_112C };
 pub const GPU_REGISTERS: Range = Range { start: 0x1F80_1810, end: 0x1F80_1818 };
 pub const SPU_REGISTERS: Range = Range { start: 0x1F80_1C00, end: 0x1F80_1E80 };
-pub const IO_PORTS: Range = Range { start: 0x1F80_1000, end: 0x1F80_1FFF };
+pub const IO_PORTS: Range = Range { start: 0x1F80_1000, end: 0x1F80_2000 };
 
 // Expansion region 2: Contains serial port
-pub const EXP2: Range = Range { start: 0x1F80_2000, end: 0x1F80_207F };
+pub const EXP2: Range = Range { start: 0x1F80_2000, end: 0x1F80_2080 };
 
 // Expansion region 3, whatever purpose: 2MB at 0x1FA0_0000
-pub const EXP3: Range = Range { start: 0x1FA0_0000, end: 0x1FBF_FFFF };
+pub const EXP3: Range = Range { start: 0x1FA0_0000, end: 0x1FC0_0000 };
 
 // 512 KB of BIOS, mapped at 0x1FC0_0000
-pub const BIOS: Range = Range { start: 0x1FC0_0000, end: 0x1FC7_FFFF };
+pub const BIOS: Range = Range { start: 0x1FC0_0000, end: 0x1FC8_0000 };

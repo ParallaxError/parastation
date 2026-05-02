@@ -14,14 +14,14 @@
 /// of the system bus to remove the higher bits of the address to ensure the correct RAM location is
 /// accessed.
 pub struct Ram {
-    data: Box<[u8; 2 * 1024 * 1024]>, // PS1 RAM is 2MB
+    data: Box<[u8]>, // PS1 RAM is 2MB
 }
+
+const RAM_SIZE: usize = 2 * 1024 * 1024;
 
 impl Ram {
     pub fn new() -> Self {
-        Ram {
-            data: Box::new([0; 2 * 1024 * 1024]),
-        }
+        Ram { data: vec![0u8; RAM_SIZE].into_boxed_slice() }
     }
 
     // Memory access

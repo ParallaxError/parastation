@@ -8,6 +8,8 @@
  */
 
 // Imports
+use std::cell::Cell;
+
 mod gpu_state;
 use gpu_state::{GpuState, DrawMode, TextureWindow, DrawingOffset};
 pub use gpu_state::Mask;
@@ -29,6 +31,9 @@ pub struct Gpu {
     // GP0 command accumulation
     gp0_buffer: Vec<u32>,
     gp0_words_remaining: u32,
+
+    // HACK to avoid BIOS deadlock
+    gpustat_bit31: Cell<bool>,
 }
 
 impl Gpu {
@@ -39,6 +44,7 @@ impl Gpu {
 
             gp0_buffer: Vec::new(),
             gp0_words_remaining: 0,
+            gpustat_bit31: Cell::new(false),
         }
     }
 }
@@ -110,7 +116,11 @@ impl Gpu {
         // Bit 29-30: DMA direction (display)
         status |= (self.state.display_state.dma_direction as u32) << 29;
 
-        // Bit 31: drawing even/odd lines in interlace mode (just stub 0), so nothing to do
+        // Bit 31: drawing even/odd lines in interlace mode (just stub 0), gonna swap it each time to avoid deadlock
+        let bit31 = !self.gpustat_bit31.get();
+        self.gpustat_bit31.set(bit31);
+        status |= (bit31 as u32) << 31;
+
         status
     }
 }
@@ -269,6 +279,8 @@ impl Gpu {
             0x01 => { self.gp0_buffer.clear(); self.gp0_words_remaining = 0 },
             // Display enable
             0x03 => self.state.display_state.display_enable = (word & 0x1) != 0,
+            // Set DMA direction
+            0x04 => self.state.display_state.dma_direction = (word & 0x3) as u8,
             // Set VRAM start 
             /* 
             0-9   X (0-1023)    (halfword address in VRAM)  (relative to begin of VRAM)

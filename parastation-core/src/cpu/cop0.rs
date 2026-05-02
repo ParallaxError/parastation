@@ -44,9 +44,10 @@ impl Cop0 {
 impl Cop0 {
     pub fn read(&self, reg: Cop0Register) -> u32 {
         match reg {
-            Cop0Register(6) | Cop0Register(9) => 0,
+            Cop0Register(3) | Cop0Register(5) | Cop0Register(6) | Cop0Register(9) => 0,
             Cop0Register(7) => self.dcic,
             Cop0Register(8) => self.badaddrv,
+            Cop0Register(11) => 0,
             Cop0Register(12) => self.sr,
             Cop0Register(13) => self.cause,
             Cop0Register(14) => self.epc,
@@ -57,6 +58,7 @@ impl Cop0 {
 
     pub fn write(&mut self, reg: Cop0Register, value: u32) {
         match reg {
+            Cop0Register(3) | Cop0Register(5) | Cop0Register(6) | Cop0Register(9) | Cop0Register(11) => (),
             Cop0Register(7) => self.dcic = value,
             Cop0Register(8) => self.badaddrv = value,
             Cop0Register(12) => self.sr = value,

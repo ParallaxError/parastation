@@ -34,9 +34,9 @@ fn main() {
         eprintln!("Failed to load psxtest_cpu.exe: {e}");
         std::process::exit(1);
     });
-    ps1.load_exe(&exe_data);
+    // ps1.load_exe(&exe_data);
 
-    // Run test
+    // Run tesI
     println!("Starting amidog test!");
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;

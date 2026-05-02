@@ -17,8 +17,10 @@ use std::path::Path;
 /// Mapped at physical address 0x1FC00000, so read and writes have this address as a base.
 /// Exposes functionality for reads and to load BIOS data from a file.
 pub struct Bios {
-    data: Box<[u8; 512 * 1024]>, // PS1 BIOS is 512KB
+    data: Box<[u8]>, // PS1 BIOS is 512KB
 }
+
+const BIOS_SIZE: usize = 512 * 1024;
 
 // File IO
 impl Bios {
@@ -27,14 +29,13 @@ impl Bios {
         let data = fs::read(path)
             .map_err(|e| Error::new(e.kind(), format!("Failed to read BIOS file: {}", e)))?;
 
-        if data.len() != 512 * 1024 {
+        if data.len() != BIOS_SIZE {
             return Err(Error::new(std::io::ErrorKind::InvalidData, "Invalid BIOS file size"));
         }
 
-        let mut buf = Box::new([0u8; 512 * 1024]);
-        buf.copy_from_slice(&data);
-
-        Ok(Bios { data: buf })
+        Ok(Bios {
+            data: data.into_boxed_slice(),
+        })
     }
 }
 

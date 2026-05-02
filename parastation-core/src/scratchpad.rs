@@ -10,13 +10,15 @@
 /// writes to scratchpad memory. The scratchpad is a small, fast memory region used for 
 /// temporary storage by the BIOS.
 pub struct Scratchpad {
-    data: Box<[u8; 1024]>, // 1KB of scratchpad memory
+    data: Box<[u8]>, // 1KB of scratchpad memory
 }
+
+const SCRATCHPAD_SIZE: usize = 1024;
 
 impl Scratchpad {
     pub fn new() -> Self {
         Scratchpad {
-            data: Box::new([0; 1024]),
+            data: vec![0u8; SCRATCHPAD_SIZE].into_boxed_slice(),
         }
     }
 

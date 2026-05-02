@@ -11,8 +11,10 @@
 
 // Modules
 mod scratchpad;
+mod interrupt_controller;
 pub mod bios;
 mod ram;
+mod dma;
 pub mod gpu;
 mod memory_map;
 mod system_bus;
@@ -20,6 +22,7 @@ mod backend;
 mod cpu;
 mod interpreter;
 
+use interrupt_controller::Interrupt;
 pub use backend::Backend;
 pub use interpreter::Interpreter;
 pub use system_bus::SystemBus;
@@ -32,6 +35,7 @@ pub struct Ps1<B: Backend> {
     cpu: Cpu,
     bus: SystemBus,
     backend: B,
+    vblank_timer: u32, // Counts cycles until next VBlank interrupt: VBlank every 33868 cycles
 }
 
 impl<B: Backend> Ps1<B> {
@@ -40,6 +44,7 @@ impl<B: Backend> Ps1<B> {
             cpu: Cpu::new(),
             bus: SystemBus::new(bios, gpu_backend),
             backend: instruction_backend,
+            vblank_timer: 33868,
         }
     }
 
@@ -84,16 +89,28 @@ impl<B: Backend> Ps1<B> {
         }
     }
 
+    fn step(&mut self) {
+        self.bus.tick_dma();
+        self.backend.step(&mut self.cpu, &mut self.bus);
+        self.vblank_timer = self.vblank_timer.wrapping_sub(1);
+        if self.vblank_timer == 0 {
+            self.vblank_timer = 33868; // Reset timer for next VBlank
+            self.bus.interrupt_controller.raise_interrupt(Interrupt::VBlank);
+        }
+    }
+
     /// Run the emulator for a given number of cycles.
     pub fn run(&mut self, cycles: u64) {
-        self.backend.run(&mut self.cpu, &mut self.bus, cycles);
+        for _ in 0..cycles {
+            self.step();
+        }
     }
 
     /// Run the emulator until the PC reaches a specific value. Useful for running until the end of
     /// the BIOS, for example.
     pub fn run_until_pc(&mut self, target_pc: u32) {
         loop {
-            self.backend.step(&mut self.cpu, &mut self.bus);
+            self.step();
             if self.cpu.pc() == target_pc {
                 break;
             }
