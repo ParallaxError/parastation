@@ -246,7 +246,6 @@ impl SystemBus {
             // Traverse the linked list
             for i in 0..word_count {
                 let cmd = self.ram.read32((addr + 4 + i * 4) & 0x1FFFFF);
-                println!("Sending GPU command: {cmd:#010x}");
                 self.gpu.write_register(0, cmd); // Write to GP0
 
             }
@@ -283,7 +282,6 @@ impl SystemBus {
 // DMA dispatch
 impl SystemBus {
     fn execute_dma_transfer(&mut self, transfer: DmaTransfer) {
-        println!("Executing DMA transfer: {:?}", transfer);
         match transfer {
             DmaTransfer::OtcFill { base_addr, word_count } => self.dma_otc(base_addr, word_count),
             DmaTransfer::GpuLinkedList { list_addr } => self.dma_gpu_linked_list(list_addr),

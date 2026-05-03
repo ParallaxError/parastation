@@ -36,6 +36,10 @@ impl GpuBackend for DummyGpuBackend {
 		println!("fill_rect: {:#?}, w: {}, h: {}, colour: {:#?}", pos, w, h, colour);
 	}
 
+	fn clear_cache(&mut self) {
+		println!("clear_cache");
+	}
+
 	fn copy_rect(&mut self, src_x: u16, src_y: u16, dst_x: u16, dst_y: u16, w: u16, h: u16, mask: &Mask) {
 		println!("copy_rect: src_x: {}, src_y: {}, dst_x: {}, dst_y: {}, w: {}, h: {}, mask: {:#?}", src_x, src_y, dst_x, dst_y, w, h, mask);
 	}

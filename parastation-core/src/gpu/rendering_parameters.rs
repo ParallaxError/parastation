@@ -111,27 +111,27 @@ impl Clut {
 
 // Polygon drawing parameters
 /// Vertex for monochrome flat-shaded polygons
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct FlatVertex {
     pub vertex: Vertex,
 }
 
 /// Vertex for shaded polygons
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct ShadedVertex {
     pub vertex: Vertex,
     pub colour: Colour,
 }
 
 /// Vertex for textured polygons
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct TexturedVertex {
     pub vertex: Vertex,
     pub texcoord: Texcoord,
 }
 
 /// Vertex for textured and shaded polygons
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct ShadedTexturedVertex {
     pub vertex: Vertex,
     pub colour: Colour,
@@ -144,6 +144,19 @@ pub struct ShadedTexturedVertex {
 pub enum PolygonVertices<V> {
     Tri(V, V, V),
     Quad(V, V, V, V),
+}
+
+impl <V: Copy> PolygonVertices<V> {
+    /// Calls the provided function for each triangle in the polygon, breaking quads into two tris
+    pub fn triangles(&self, mut f: impl FnMut(V, V, V)) {
+        match self {
+            PolygonVertices::Tri(v0, v1, v2) => f(*v0, *v1, *v2),
+            PolygonVertices::Quad(v0, v1, v2, v3) => {
+                f(*v0, *v1, *v2);
+                f(*v0, *v2, *v3);
+            }
+        }
+    }
 }
 
 /// Represents the texture parameters for a textured polygon, one per polygon
@@ -185,13 +198,13 @@ pub enum Polygon {
 
 // Line drawing parameters
 /// Represents a point for monochrome line drawing, with a vertex
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct LinePoint {
     pub vertex: Vertex,
 }
 
 /// Represents a point for coloured line drawing, with a vertex and colour
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct ColouredLinePoint {
     pub vertex: Vertex,
     pub colour: Colour,

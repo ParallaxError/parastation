@@ -13,7 +13,7 @@ use winit::window::Window;
 use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
 use parastation_core::gpu::backend::GpuBackend;
-use parastation_core::gpu::{Colour, DrawParams, Line, Mask, Polygon, Rect, Vertex, RectSize};
+use parastation_core::gpu::{Colour, DrawParams, FlatVertex, Line, Mask, Polygon, Rect, RectSize, Vertex};
 
 pub struct SoftwareGpuBackend {
 	pixels: Pixels,
@@ -79,9 +79,81 @@ impl SoftwareGpuBackend {
 	}
 }
 
+impl SoftwareGpuBackend {
+	// Polygon drawing
+	fn draw_flat_triangle(
+		&mut self,
+		v0: FlatVertex,
+		v1: FlatVertex,
+		v2: FlatVertex,
+		colour: Colour,
+		_semi_transparent: bool,
+		draw_params: &DrawParams,
+	) {
+		let mut verts = [v0.vertex, v1.vertex, v2.vertex];
+		verts.sort_unstable_by_key(|v| v.y);
+		let [top, mid, bot] = verts;
+
+		if top.y == bot.y { return; }
+		if (bot.x - top.x).abs() > 1023 || (bot.y - top.y).abs() > 511 { return; }
+
+		let ox = draw_params.drawing_offset.x as i32;
+		let oy = draw_params.drawing_offset.y as i32;
+		let area = &draw_params.drawing_area;
+
+		let top_x = top.x as f32;
+		let top_y = top.y as f32;
+		let mid_x = mid.x as f32;
+		let mid_y = mid.y as f32;
+		let bot_x = bot.x as f32;
+		let bot_y = bot.y as f32;
+		let total_dy = bot_y - top_y;
+
+		for y in top.y as i32..=bot.y as i32 {
+			let screen_y = y + oy;
+			if screen_y < area.y1 as i32 || screen_y > area.y2 as i32 { continue; }
+			if screen_y < 0 || screen_y >= 512 { continue; }
+
+			let t = (y as f32 - top_y) / total_dy;
+			let long_x = top_x + t * (bot_x - top_x);
+
+			let short_x = if (y as f32) < mid_y {
+				let s = (y as f32 - top_y) / (mid_y - top_y);
+				top_x + s * (mid_x - top_x)
+			} else {
+				if bot_y == mid_y { long_x } else {
+					let s = (y as f32 - mid_y) / (bot_y - mid_y);
+					mid_x + s * (bot_x - mid_x)
+				}
+			};
+
+			let (x0, x1) = if long_x < short_x {
+				(long_x as i32, short_x as i32)
+			} else {
+				(short_x as i32, long_x as i32)
+			};
+
+			for x in x0..=x1 {
+				let screen_x = x + ox;
+				if screen_x < area.x1 as i32 || screen_x > area.x2 as i32 { continue; }
+				if screen_x < 0 || screen_x >= 1024 { continue; }
+
+				self.set_pixel_masked(screen_x as u16, screen_y as u16, colour, &draw_params.mask);
+			}
+		}
+	}
+}
+
 impl GpuBackend for SoftwareGpuBackend {
 	fn draw_polygon(&mut self, polygon: &Polygon, params: &DrawParams) {
-		println!("draw_polygon: {:#?}\nparams: {:#?}", polygon, params);
+		match polygon {
+			Polygon::Monochrome { colour, vertices, semi_transparent } => {
+				vertices.triangles(|v0, v1, v2| {
+					self.draw_flat_triangle(v0, v1, v2, *colour, *semi_transparent, params);
+				});
+			}
+			_ => { println!("draw_polygon: {:#?}\nparams: {:#?}", polygon, params); }
+		}
 	}
 
 	fn draw_line(&mut self, line: &Line, params: &DrawParams) {
@@ -127,6 +199,10 @@ impl GpuBackend for SoftwareGpuBackend {
 
 	fn fill_rect(&mut self, pos: Vertex, w: u16, h: u16, colour: Colour) {
 		println!("fill_rect: {:#?}, w: {}, h: {}, colour: {:#?}", pos, w, h, colour);
+	}
+
+	fn clear_cache(&mut self) {
+		println!("clear_cache");
 	}
 
 	fn copy_rect(&mut self, src_x: u16, src_y: u16, dst_x: u16, dst_y: u16, w: u16, h: u16, mask: &Mask) {

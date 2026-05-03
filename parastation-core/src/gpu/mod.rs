@@ -20,6 +20,20 @@ pub use backend::GpuBackend;
 mod gpu_commands;
 pub use gpu_commands::*;
 
+// VRAM transfer modes
+enum Gp0Mode {
+    Command,
+    VramWrite
+}
+
+struct VramTransfer {
+    x: u16, y: u16,
+    w: u16, h: u16,
+    current_x: u16,
+    current_y: u16,
+    words_remaining: u32,
+}
+
 /// Encapsulates the state and functionality of the PS1 GPU.
 /// 
 /// Absorbs register reads and writes when interacting with the GPU and owns the GPU backend
@@ -34,6 +48,10 @@ pub struct Gpu {
 
     // HACK to avoid BIOS deadlock
     gpustat_bit31: Cell<bool>,
+
+    // VRAM transfers
+    gp0_mode: Gp0Mode,
+    vram_transfer: Option<VramTransfer>,
 }
 
 impl Gpu {
@@ -45,6 +63,9 @@ impl Gpu {
             gp0_buffer: Vec::new(),
             gp0_words_remaining: 0,
             gpustat_bit31: Cell::new(false),
+
+            gp0_mode: Gp0Mode::Command,
+            vram_transfer: None,
         }
     }
 }
@@ -128,32 +149,50 @@ impl Gpu {
 // GP0 command handling and dispatch
 impl Gpu {
     fn write_gp0(&mut self, word: u32) {
-        // First, are we currently accumulating a command?
-        if self.gp0_words_remaining > 0 {
-            // Yes, so add this word to the buffer and decrease the count
-            self.gp0_buffer.push(word);
-            self.gp0_words_remaining -= 1;
-        } else {
-            // No, so this word is a new command. Decode it and set up the buffer and count.
-            let command = decode_gp0_command(word);
-            self.gp0_buffer.clear();
-            self.gp0_buffer.push(word);
-            self.gp0_words_remaining = gp0_command_parameter_count(&command) as u32;
+        match self.gp0_mode
+        {
+            // Just receive a command word for VRAM write mode
+            Gp0Mode::VramWrite => {
+                self.gp0_receive_vram_word(word);
+                return;
+            }
+
+            Gp0Mode::Command => {
+                // First, are we currently accumulating a command?
+                if self.gp0_words_remaining > 0 {
+                    // Yes, so add this word to the buffer and decrease the count
+                    self.gp0_buffer.push(word);
+                    self.gp0_words_remaining -= 1;
+                } else {
+                    // No, so this word is a new command. Decode it and set up the buffer and count.
+                    let command = decode_gp0_command(word);
+                    self.gp0_buffer.clear();
+                    self.gp0_buffer.push(word);
+                    self.gp0_words_remaining = gp0_command_parameter_count(&command) as u32;
+                }
+        
+                // If we're done accumulating a command, execute it
+                if self.gp0_words_remaining == 0 {
+                    let command = decode_gp0_command(self.gp0_buffer[0]);
+                    self.execute_gp0_command(command);
+                }
+            }
         }
 
-        // If we're done accumulating a command, execute it
-        if self.gp0_words_remaining == 0 {
-            let command = decode_gp0_command(self.gp0_buffer[0]);
-            self.execute_gp0_command(command);
-
-            // TODO should present with an interrupt, not unconditionally
-            // self.display();
-        }
     }
     
     fn execute_gp0_command(&mut self, command: Gp0Command) {
         match command {
+            Gp0Command::Nop => {},
+            Gp0Command::ClearCache => self.backend.clear_cache(),
+
+            Gp0Command::MonochromeQuad => self.draw_monochrome_quad(),
+            Gp0Command::ShadedTri => self.draw_shaded_tri(),
+            Gp0Command::ShadedQuad => self.draw_shaded_quad(),
+
             Gp0Command::MonochromeRectangle => self.draw_monochrome_rectangle(),
+
+            Gp0Command::SendRectToVram => self.begin_vram_write(),
 
             Gp0Command::SetRenderingAttribute => self.set_rendering_attribute(),
             _ => eprintln!("GP0 command execution not implemented: {:?}", command),
@@ -173,6 +212,56 @@ impl Gpu {
             0xE5 => self.state.drawing_offset = DrawingOffset::from_gp0_command(self.gp0_buffer[0]),
             0xE6 => self.state.mask = Mask::from_gp0_command(self.gp0_buffer[0]),
             _ => eprintln!("Unknown GP0 rendering attribute command: 0x{:02X}", cmd)
+        }
+    }
+}
+
+// GP0 VRAM commands
+impl Gpu {
+    fn begin_vram_write(&mut self) {
+        /*
+        1st  Command           (Cc000000h)
+        2nd  Destination Coord (YyyyXxxxh)
+        3rd  Width+Height      (YsizXsizh)
+
+        Transfers data from CPU to frame buffer. 
+        If the number of halfwords to be sent is odd, an extra halfword should be sent (packets consist of 32bit units). 
+        The transfer is affected by Mask setting.
+        */
+
+        let x = (self.gp0_buffer[1] & 0x3FF) as u16;
+        let y = ((self.gp0_buffer[1] >> 16) & 0x1FF) as u16;
+        let w = (self.gp0_buffer[2] & 0x3FF) as u16;
+        let h = ((self.gp0_buffer[2] >> 16) & 0x1FF) as u16;
+
+        // Word count is the total pixels rounded up to 32-bit words
+        let pixel_count = w as u32 * h as u32;
+        let words = (pixel_count + 1) / 2;
+
+        if words == 0 { return; }
+
+        self.vram_transfer = Some(VramTransfer {
+            x, y, w, h,
+            current_x: x,
+            current_y: y,
+            words_remaining: words,
+        });
+        self.gp0_words_remaining = 0; // We'll receive words until the count in vram_transfer is 0
+        self.gp0_buffer.clear(); // Clear the buffer to receive the pixel data
+        self.backend.vram_write_begin(x, y, w, h, &self.state.mask);
+        self.gp0_mode = Gp0Mode::VramWrite;
+    }
+
+    fn gp0_receive_vram_word(&mut self, word: u32) {
+        self.backend.vram_write(word);
+
+        if let Some(transfer) = &mut self.vram_transfer {
+            // Decrease the word count and check if we're done
+            transfer.words_remaining -= 1;
+            if transfer.words_remaining == 0 {
+                self.gp0_mode = Gp0Mode::Command;
+                self.vram_transfer = None;
+            }
         }
     }
 }
@@ -218,6 +307,113 @@ impl Gpu {
             draw_mode: self.state.draw_mode.clone(),
             semi_transparency: self.state.draw_mode.semi_transparency,
         }
+    }
+    /*
+    GP0(28h) - Monochrome four-point polygon, opaque
+    GP0(2Ah) - Monochrome four-point polygon, semi-transparent
+    1st  Color+Command     (CcBbGgRrh)
+    2nd  Vertex1           (YyyyXxxxh)
+    3rd  Vertex2           (YyyyXxxxh)
+    4th  Vertex3           (YyyyXxxxh)
+    (5th) Vertex4           (YyyyXxxxh) (if any)
+    */
+
+    fn draw_monochrome_quad(&mut self) {
+
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour = Colour::from_word(self.gp0_buffer[0]);
+        let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
+        let vertex2 = Vertex::from_word(self.gp0_buffer[2]);
+        let vertex3 = Vertex::from_word(self.gp0_buffer[3]);
+        let vertex4 = Vertex::from_word(self.gp0_buffer[4]);
+
+        let semi_transparent = match cmd {
+            0x28 => false,
+            0x2A => true,
+            _ => unreachable!(),
+        };
+
+        let quad = Polygon::Monochrome {
+            colour,
+            vertices: PolygonVertices::Quad(
+                FlatVertex { vertex: vertex1 },
+                FlatVertex { vertex: vertex2 },
+                FlatVertex { vertex: vertex3 },
+                FlatVertex { vertex: vertex4 },
+            ),
+            semi_transparent: semi_transparent,
+        };
+
+        self.backend.draw_polygon(&quad, &self.get_draw_params());
+    }
+
+    /*
+    1st  Color1+Command    (CcBbGgRrh)
+    2nd  Vertex1           (YyyyXxxxh)
+    3rd  Color2            (00BbGgRrh)
+    4th  Vertex2           (YyyyXxxxh)
+    5th  Color3            (00BbGgRrh)
+    6th  Vertex3           (YyyyXxxxh)
+    (7th) Color4            (00BbGgRrh) (if any)
+    (8th) Vertex4           (YyyyXxxxh) (if any)
+     */
+
+    fn draw_shaded_tri(&mut self) {
+
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour1 = Colour::from_word(self.gp0_buffer[0]);
+        let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
+        let colour2 = Colour::from_word(self.gp0_buffer[2]);
+        let vertex2 = Vertex::from_word(self.gp0_buffer[3]);
+        let colour3 = Colour::from_word(self.gp0_buffer[4]);
+        let vertex3 = Vertex::from_word(self.gp0_buffer[5]);
+
+        let semi_transparent = match cmd {
+            0x30 => false,
+            0x32 => true,
+            _ => unreachable!(),
+        };
+
+        let tri = Polygon::Shaded {
+            vertices: PolygonVertices::Tri(
+                ShadedVertex { vertex: vertex1, colour: colour1 },
+                ShadedVertex { vertex: vertex2, colour: colour2 },
+                ShadedVertex { vertex: vertex3, colour: colour3 },
+            ),
+            semi_transparent: semi_transparent,
+        };
+
+        self.backend.draw_polygon(&tri, &self.get_draw_params());
+    }
+
+    fn draw_shaded_quad(&mut self) {
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour1 = Colour::from_word(self.gp0_buffer[0]);
+        let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
+        let colour2 = Colour::from_word(self.gp0_buffer[2]);
+        let vertex2 = Vertex::from_word(self.gp0_buffer[3]);
+        let colour3 = Colour::from_word(self.gp0_buffer[4]);
+        let vertex3 = Vertex::from_word(self.gp0_buffer[5]);
+        let colour4 = Colour::from_word(self.gp0_buffer[6]);
+        let vertex4 = Vertex::from_word(self.gp0_buffer[7]);
+
+        let semi_transparent = match cmd {
+            0x38 => false,
+            0x3A => true,
+            _ => unreachable!(),
+        };
+
+        let quad = Polygon::Shaded {
+            vertices: PolygonVertices::Quad(
+                ShadedVertex { vertex: vertex1, colour: colour1 },
+                ShadedVertex { vertex: vertex2, colour: colour2 },
+                ShadedVertex { vertex: vertex3, colour: colour3 },
+                ShadedVertex { vertex: vertex4, colour: colour4 },
+            ),
+            semi_transparent: semi_transparent,
+        };
+
+        self.backend.draw_polygon(&quad, &self.get_draw_params());
     }
 
     fn draw_monochrome_rectangle(&mut self) {

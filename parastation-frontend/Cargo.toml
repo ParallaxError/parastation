@@ -5,5 +5,9 @@ edition = "2024"
 
 [dependencies]
 parastation-core = { path = "../parastation-core" }
-winit = { version = "0.28", features = [] }
-pixels = "0.14"
+glow = "0.13"
+glutin = "0.31"
+glutin-winit = "0.4"
+winit = { version = "0.29", features = ["rwh_05"] }
+bytemuck = { version = "1", features = ["derive"] }
+raw-window-handle = "0.5.2"

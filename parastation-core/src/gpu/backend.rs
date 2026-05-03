@@ -29,6 +29,9 @@ pub trait GpuBackend {
     fn fill_rect(&mut self, pos: Vertex, w: u16, h: u16, colour: Colour);
 
     // VRAM commands
+    /// Clear the VRAM cache
+    fn clear_cache(&mut self);
+
     /// Copy a rectangular area from VRAM to another area in VRAM
     fn copy_rect(&mut self, src_x: u16, src_y: u16, dst_x: u16, dst_y: u16, w: u16, h: u16, mask: &Mask);
 

@@ -468,7 +468,6 @@ impl DmaController {
             if !self.channels[i].is_active() { continue; } // Channel not active, skip
 
             let transfer = self.decode_channel(i)?;
-            println!("Pending DMA transfer on channel {i}: {transfer:?}");
             return Some((i, transfer));
         }
         None
