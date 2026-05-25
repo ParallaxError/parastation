@@ -13,7 +13,7 @@ void main() {
     vec2 ndc = (position / vec2(1024.0, 512.0)) * 2.0 - 1.0;
     // ndc.y = -ndc.y;
     gl_Position = vec4(ndc, 0.0, 1.0);
-    frag_colour = colour / 255.0;
+    frag_colour = colour;
     frag_texcoord = texcoord;
     frag_clut = clut_coord;
 }

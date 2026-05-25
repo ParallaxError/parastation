@@ -187,6 +187,8 @@ impl Gpu {
             Gp0Command::ClearCache => self.backend.clear_cache(),
 
             Gp0Command::MonochromeQuad => self.draw_monochrome_quad(),
+            Gp0Command::TexturedTri => self.draw_textured_tri(),
+            Gp0Command::TexturedQuad => self.draw_textured_quad(),
             Gp0Command::ShadedTri => self.draw_shaded_tri(),
             Gp0Command::ShadedQuad => self.draw_shaded_quad(),
 
@@ -348,6 +350,121 @@ impl Gpu {
     }
 
     /*
+    GP0(24h) - Textured three-point polygon, opaque, texture-blending
+    GP0(25h) - Textured three-point polygon, opaque, raw-texture
+    GP0(26h) - Textured three-point polygon, semi-transparent, texture-blending
+    GP0(27h) - Textured three-point polygon, semi-transparent, raw-texture
+    
+    1st  Color+Command     (CcBbGgRrh) (color is ignored for raw-textures)
+    2nd  Vertex1           (YyyyXxxxh)
+    3rd  Texcoord1+Palette (ClutYyXxh)
+    4th  Vertex2           (YyyyXxxxh)
+    5th  Texcoord2+Texpage (PageYyXxh)
+    6th  Vertex3           (YyyyXxxxh)
+    7th  Texcoord3         (0000YyXxh)
+     */
+    fn draw_textured_tri(&mut self) {
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour = Colour::from_word(self.gp0_buffer[0]);
+        let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
+        let texcoord1 = Texcoord::from_word(self.gp0_buffer[2]);
+        let vertex2 = Vertex::from_word(self.gp0_buffer[3]);
+        let texcoord2 = Texcoord::from_word(self.gp0_buffer[4]);
+        let vertex3 = Vertex::from_word(self.gp0_buffer[5]);
+        let texcoord3 = Texcoord::from_word(self.gp0_buffer[6]);
+
+        let semi_transparent = match cmd {
+            0x24 | 0x25 => false,
+            0x26 | 0x27 => true,
+            _ => unreachable!(),
+        };
+
+        let raw_texture = match cmd {
+            0x24 | 0x26 => false,
+            0x25 | 0x27 => true,
+            _ => unreachable!(),
+        };
+
+        let tri = Polygon::Textured {
+            colour: colour,
+            vertices: PolygonVertices::Tri(
+                TexturedVertex { vertex: vertex1, texcoord: texcoord1 },
+                TexturedVertex { vertex: vertex2, texcoord: texcoord2 },
+                TexturedVertex { vertex: vertex3, texcoord: texcoord3 },
+            ),
+            semi_transparent: semi_transparent,
+            texture_params: TextureParams {
+                clut: Clut::from_word(self.gp0_buffer[2]),
+                tex_page: TexPageAttr::from_word(self.gp0_buffer[4] >> 16),
+                raw_texture,
+            },
+        };
+
+        self.backend.draw_polygon(&tri, &self.get_draw_params());
+    }
+
+    /*
+    GP0(2Ch) - Textured four-point polygon, opaque, texture-blending
+    GP0(2Dh) - Textured four-point polygon, opaque, raw-texture
+    GP0(2Eh) - Textured four-point polygon, semi-transparent, texture-blending
+    GP0(2Fh) - Textured four-point polygon, semi-transparent, raw-texture
+    1st  Color+Command     (CcBbGgRrh) (color is ignored for raw-textures)
+    2nd  Vertex1           (YyyyXxxxh)
+    3rd  Texcoord1+Palette (ClutYyXxh)
+    4th  Vertex2           (YyyyXxxxh)
+    5th  Texcoord2+Texpage (PageYyXxh)
+    6th  Vertex3           (YyyyXxxxh)
+    7th  Texcoord3         (0000YyXxh)
+    (8th) Vertex4           (YyyyXxxxh) (if any)
+    (9th) Texcoord4         (0000YyXxh) (if any)
+     */
+
+    fn draw_textured_quad(&mut self) {
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour = Colour::from_word(self.gp0_buffer[0]);
+        let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
+        let texcoord1 = Texcoord::from_word(self.gp0_buffer[2]);
+        let vertex2 = Vertex::from_word(self.gp0_buffer[3]);
+        let texcoord2 = Texcoord::from_word(self.gp0_buffer[4]);
+        let vertex3 = Vertex::from_word(self.gp0_buffer[5]);
+        let texcoord3 = Texcoord::from_word(self.gp0_buffer[6]);
+        let vertex4 = Vertex::from_word(self.gp0_buffer[7]);
+        let texcoord4 = Texcoord::from_word(self.gp0_buffer[8]);
+
+        let semi_transparent = match cmd {
+            0x2C | 0x2D => false,
+            0x2E | 0x2F => true,
+            _ => unreachable!(),
+        };
+
+        let raw_texture = match cmd {
+            0x2C | 0x2E => false,
+            0x2D | 0x2F => true,
+            _ => unreachable!(),
+        };
+
+        println!("cmd: 0x{:08X}", cmd);
+
+        let quad = Polygon::Textured {
+            colour: colour,
+            vertices: PolygonVertices::Quad(
+                TexturedVertex { vertex: vertex1, texcoord: texcoord1 },
+                TexturedVertex { vertex: vertex2, texcoord: texcoord2 },
+                TexturedVertex { vertex: vertex3, texcoord: texcoord3 },
+                TexturedVertex { vertex: vertex4, texcoord: texcoord4 },
+            ),
+            semi_transparent: semi_transparent,
+            texture_params: TextureParams {
+                clut: Clut::from_word(self.gp0_buffer[2]),
+                tex_page: TexPageAttr::from_word(self.gp0_buffer[4] >> 16),
+                raw_texture,
+            },
+        };
+
+        self.backend.draw_polygon(&quad, &self.get_draw_params());
+    }
+
+    /*
     1st  Color1+Command    (CcBbGgRrh)
     2nd  Vertex1           (YyyyXxxxh)
     3rd  Color2            (00BbGgRrh)
@@ -416,17 +533,18 @@ impl Gpu {
         self.backend.draw_polygon(&quad, &self.get_draw_params());
     }
 
+    /*
+    GP0(68h) - Monochrome Rectangle (1x1) (Dot) (opaque)
+    GP0(6Ah) - Monochrome Rectangle (1x1) (Dot) (semi-transparent)
+    GP0(70h) - Monochrome Rectangle (8x8) (opaque)
+    GP0(72h) - Monochrome Rectangle (8x8) (semi-transparent)
+    GP0(78h) - Monochrome Rectangle (16x16) (opaque)
+    GP0(7Ah) - Monochrome Rectangle (16x16) (semi-transparent)
+    1st  Color+Command     (CcBbGgRrh)
+    2nd  Vertex            (YyyyXxxxh) 
+     */
+
     fn draw_monochrome_rectangle(&mut self) {
-        /*
-        GP0(68h) - Monochrome Rectangle (1x1) (Dot) (opaque)
-        GP0(6Ah) - Monochrome Rectangle (1x1) (Dot) (semi-transparent)
-        GP0(70h) - Monochrome Rectangle (8x8) (opaque)
-        GP0(72h) - Monochrome Rectangle (8x8) (semi-transparent)
-        GP0(78h) - Monochrome Rectangle (16x16) (opaque)
-        GP0(7Ah) - Monochrome Rectangle (16x16) (semi-transparent)
-        1st  Color+Command     (CcBbGgRrh)
-        2nd  Vertex            (YyyyXxxxh) 
-         */
 
         let cmd = (self.gp0_buffer[0] >> 24) as u8;
         let colour = Colour::from_word(self.gp0_buffer[0]);
@@ -524,13 +642,13 @@ impl Gpu {
             8-23  Not used (zero)
              */
             0x08 => {
-                let horizontal_resolution_1 = ((word >> 2) & 0x3) as u8;
-                let vertical_resolution = ((word >> 2) & 0x1) != 0;
-                let video_mode = ((word >> 3) & 0x1) != 0;
-                let display_colour_depth = ((word >> 4) & 0x1) != 0;
-                let vertical_interlace = ((word >> 5) & 0x1) != 0;
-                let horizontal_resolution_2 = ((word >> 6) & 0x1) != 0;
-                let reverseflag = ((word >> 7) & 0x1) != 0;
+                let horizontal_resolution_1 = (word & 0x3) as u8;         // bits 0-1
+                let vertical_resolution     = ((word >> 2) & 0x1) != 0;   // bit 2
+                let video_mode              = ((word >> 3) & 0x1) != 0;   // bit 3
+                let display_colour_depth    = ((word >> 4) & 0x1) != 0;   // bit 4
+                let vertical_interlace      = ((word >> 5) & 0x1) != 0;   // bit 5
+                let horizontal_resolution_2 = ((word >> 6) & 0x1) != 0;   // bit 6
+                let reverseflag             = ((word >> 7) & 0x1) != 0;   // bit 7
 
                 self.state.display_state.horizontal_resolution_1 = horizontal_resolution_1;
                 self.state.display_state.vertical_resolution = vertical_resolution;

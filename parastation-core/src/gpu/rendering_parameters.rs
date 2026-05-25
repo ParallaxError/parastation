@@ -94,17 +94,18 @@ impl Texcoord {
 }
 
 /// The palette for 4/8 bit textures, encoded as a colour look up table
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Clut {
     pub x: u8,
     pub y: u16,
 }
 
 impl Clut {
-    pub fn from_word(word: u16) -> Self {
+    pub fn from_word(word: u32) -> Self {
+        let upper = word >> 16;
         Self {
-            x: (word & 0x3F) as u8,
-            y: ((word >> 6) & 0x1FF) as u16,
+            x: ((upper & 0x3F) as u8),        // bits 16-21, in 16-pixel units
+            y: (((upper >> 6) & 0x1FF) as u16), // bits 22-30
         }
     }
 }
@@ -153,14 +154,14 @@ impl <V: Copy> PolygonVertices<V> {
             PolygonVertices::Tri(v0, v1, v2) => f(*v0, *v1, *v2),
             PolygonVertices::Quad(v0, v1, v2, v3) => {
                 f(*v0, *v1, *v2);
-                f(*v0, *v2, *v3);
+                f(*v1, *v3, *v2);
             }
         }
     }
 }
 
 /// Represents the texture parameters for a textured polygon, one per polygon
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct TextureParams {
     pub clut: Clut,
     pub tex_page: TexPageAttr,
