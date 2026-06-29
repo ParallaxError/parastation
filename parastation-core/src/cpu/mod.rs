@@ -1,8 +1,8 @@
 /*
  * @file /parastation-core/src/cpu/mod.rs
  * @brief
- * Encapsulation of the PS1 CPU, a MIPS R3000A. Contains the CPU state (registers, PC, etc.) 
- * 
+ * Encapsulation of the PS1 CPU, a MIPS R3000A. Contains the CPU state (registers, PC, etc.)
+ *
  * -----
  */
 
@@ -22,15 +22,15 @@ pub struct MipsRegister(pub u8);
 /// Represents the PS1 CPU, a MIPS R3000A. Contains the CPU state (registers, PC, etc.)
 pub struct Cpu {
     registers: [u32; 32], // 32 general purpose registers
-    pc: u32, // Program counter
-    next_pc: u32, // Next program counter (for branch delay slot)
-    current_pc: u32, // Current program counter (for exceptions)
+    pc: u32,              // Program counter
+    next_pc: u32,         // Next program counter (for branch delay slot)
+    current_pc: u32,      // Current program counter (for exceptions)
 
     hi: u32, // HI register for multiplication/division results
     lo: u32, // LO register for multiplication/division results
 
     cop0: Cop0, // Coprocessor 0 for system control
-    gte: Gte, // Geometry Transformation Engine for 3D graphics
+    gte: Gte,   // Geometry Transformation Engine for 3D graphics
 
     in_delay_slot: bool, // Whether currently executing an instruction in a branch delay slot
     load_delay: Option<(MipsRegister, u32)>, // Pending load to commit this step
@@ -63,11 +63,12 @@ impl Cpu {
 impl Cpu {
     // Registers
     pub fn read_reg(&self, reg: MipsRegister) -> u32 {
-         self.registers[reg.0 as usize] 
+        self.registers[reg.0 as usize]
     }
 
     pub fn write_reg(&mut self, reg: MipsRegister, value: u32) {
-        if reg.0 != 0 { // Register 0 is hardwired to 0
+        if reg.0 != 0 {
+            // Register 0 is hardwired to 0
             self.registers[reg.0 as usize] = value;
         }
     }
@@ -138,6 +139,16 @@ impl Cpu {
         self.cop0.write(reg, value);
     }
 
+    // Coprocessor 2
+    pub fn read_gte(&self, reg: GteRegister) -> u32 {
+        println!("Reading GTE register {:?}", reg);
+        0
+    }
+
+    pub fn write_gte(&mut self, reg: GteRegister, value: u32) {
+        println!("Writing GTE register {:?} with value 0x{:08X}", reg, value);
+    }
+
     // Load delay slot
     pub fn commit_load_delay(&mut self) {
         if let Some((reg, value)) = self.load_delay.take() {
@@ -149,8 +160,10 @@ impl Cpu {
     }
 
     pub fn set_load_delay(&mut self, reg: MipsRegister, val: u32) {
-        if reg.0 == 0 { return; }
-    
+        if reg.0 == 0 {
+            return;
+        }
+
         // If there's a pending commit for the same register, cancel it
         // (second load to same register cancels the first)
         if let Some((pending_reg, _)) = self.load_delay {
@@ -158,7 +171,6 @@ impl Cpu {
                 self.load_delay = None;
             }
         }
-
 
         self.next_load_delay = Some((reg, val));
     }

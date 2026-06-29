@@ -3,7 +3,7 @@
  * @brief
  * Read-only Memory (ROM) for the PS1 BIOS. Can load initial BIOS data from a file, and provides an
  * interface to read from but not write to BIOS memory.
- * 
+ *
  * -----
  */
 
@@ -13,7 +13,7 @@ use std::io::Error;
 use std::path::Path;
 
 /// ROM image of the PS1 BIOS. Provides read-only access to the BIOS data.
-/// 
+///
 /// Mapped at physical address 0x1FC00000, so read and writes have this address as a base.
 /// Exposes functionality for reads and to load BIOS data from a file.
 pub struct Bios {
@@ -30,7 +30,10 @@ impl Bios {
             .map_err(|e| Error::new(e.kind(), format!("Failed to read BIOS file: {}", e)))?;
 
         if data.len() != BIOS_SIZE {
-            return Err(Error::new(std::io::ErrorKind::InvalidData, "Invalid BIOS file size"));
+            return Err(Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid BIOS file size",
+            ));
         }
 
         Ok(Bios {

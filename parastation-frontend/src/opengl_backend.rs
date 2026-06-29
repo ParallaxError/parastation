@@ -2,25 +2,38 @@
  * @file /parastation-frontend/src/opengl_backend.rs
  * @brief
  * OpenGL GPU backend implementation, using the glutin crate to render graphics.
- * 
+ *
  * -----
  */
 
 // Imports
-use glow::{Buffer, Context, Framebuffer, HasContext, Program, RGBA, Texture, VertexArray};
-use glutin::surface::WindowSurface;
+use glow::{Buffer, Context, Framebuffer, HasContext, Program, Texture, VertexArray};
 
+use parastation_core::gpu::TextureWindow;
 use parastation_core::gpu::backend::GpuBackend;
 use parastation_core::gpu::*;
 
-/// VRAM transfer from the CPU to the OpenGL VRAM texture, accumulating pixels until the specified width 
+/// VRAM transfer from the CPU to the OpenGL VRAM texture, accumulating pixels until the specified width
 /// and height are reached, then uploading to the GPU in one go
 struct VramTransfer {
-    x: u16, y: u16,
-    w: u16, h: u16,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
     current_x: u16,
     current_y: u16,
-    pixels: Vec<u16>,  // R16UI accumulated pixels
+    pixels: Vec<u16>, // R16UI accumulated pixels
+}
+
+/// VRAM transfer from the OpenGL VRAM texture to the CPU, reading back a region once and then popping pixels
+/// out of it one word (2 pixels) at a time
+struct VramReadTransfer {
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    pixels: Vec<u16>, // raw BGR555 pixels, read back from vram_texture
+    cursor: usize,    // index into pixels of the next pixel to return
 }
 
 pub struct OpenGlBackend {
@@ -49,6 +62,7 @@ pub struct OpenGlBackend {
 
     // VRAM transfer
     vram_transfer: Option<VramTransfer>,
+    vram_read_transfer: Option<VramReadTransfer>,
 }
 
 unsafe fn compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str) -> glow::Program {
@@ -58,7 +72,10 @@ unsafe fn compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str) ->
         gl.shader_source(vert, vert_src);
         gl.compile_shader(vert);
         if !gl.get_shader_compile_status(vert) {
-            panic!("Vertex shader compile error:\n{}", gl.get_shader_info_log(vert));
+            panic!(
+                "Vertex shader compile error:\n{}",
+                gl.get_shader_info_log(vert)
+            );
         }
 
         // Compile fragment shader
@@ -66,7 +83,10 @@ unsafe fn compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str) ->
         gl.shader_source(frag, frag_src);
         gl.compile_shader(frag);
         if !gl.get_shader_compile_status(frag) {
-            panic!("Fragment shader compile error:\n{}", gl.get_shader_info_log(frag));
+            panic!(
+                "Fragment shader compile error:\n{}",
+                gl.get_shader_info_log(frag)
+            );
         }
 
         // Link program
@@ -92,19 +112,21 @@ unsafe fn check_gl_errors(gl: &glow::Context, label: &str) {
     unsafe {
         loop {
             let err = gl.get_error();
-            if err == glow::NO_ERROR { break; }
+            if err == glow::NO_ERROR {
+                break;
+            }
             panic!("GL error at {label}: {err:#x}");
         }
     }
 }
 
 impl OpenGlBackend {
-    const FLAT_VERT : &'static str = include_str!("shaders/flat.vert");
-    const FLAT_FRAG : &'static str = include_str!("shaders/flat.frag");
-    const TEXTURED_VERT : &'static str = include_str!("shaders/textured.vert");
-    const TEXTURED_FRAG : &'static str = include_str!("shaders/textured.frag");
-    const PRESENT_VERT : &'static str = include_str!("shaders/present.vert");
-    const PRESENT_FRAG : &'static str = include_str!("shaders/present.frag");
+    const FLAT_VERT: &'static str = include_str!("shaders/flat.vert");
+    const FLAT_FRAG: &'static str = include_str!("shaders/flat.frag");
+    const TEXTURED_VERT: &'static str = include_str!("shaders/textured.vert");
+    const TEXTURED_FRAG: &'static str = include_str!("shaders/textured.frag");
+    const PRESENT_VERT: &'static str = include_str!("shaders/present.vert");
+    const PRESENT_FRAG: &'static str = include_str!("shaders/present.frag");
 
     pub fn new(gl: Context) -> Self {
         unsafe {
@@ -112,39 +134,65 @@ impl OpenGlBackend {
             let vram_texture = gl.create_texture().unwrap();
             gl.bind_texture(glow::TEXTURE_2D, Some(vram_texture));
             gl.tex_image_2d(
-                glow::TEXTURE_2D, 0,
+                glow::TEXTURE_2D,
+                0,
                 glow::R16UI as i32,
-                1024, 512, 0,
-                glow::RED_INTEGER, glow::UNSIGNED_SHORT, 
-                None
+                1024,
+                512,
+                0,
+                glow::RED_INTEGER,
+                glow::UNSIGNED_SHORT,
+                None,
             );
 
             // Some filtering to make it look better when scaled up, but still pixelated
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_BASE_LEVEL, 0);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, 0);
 
             // Create framebuffer for rendering to VRAM texture
             let vram_texture_fbo = gl.create_texture().unwrap();
             gl.bind_texture(glow::TEXTURE_2D, Some(vram_texture_fbo));
             gl.tex_image_2d(
-                glow::TEXTURE_2D, 0,
+                glow::TEXTURE_2D,
+                0,
                 glow::RGBA as i32,
-                1024, 512, 0,
+                1024,
+                512,
+                0,
                 glow::RGBA,
                 glow::UNSIGNED_BYTE,
                 None,
             );
 
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
 
             let vram_framebuffer = gl.create_framebuffer().unwrap();
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(vram_framebuffer));
             gl.framebuffer_texture_2d(
-                glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, 
-                glow::TEXTURE_2D, Some(vram_texture_fbo), 0
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D,
+                Some(vram_texture_fbo),
+                0,
             );
 
             let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
@@ -194,13 +242,13 @@ impl OpenGlBackend {
 
             let stride = std::mem::size_of::<TexturedGlVertex>() as i32;
             gl.enable_vertex_attrib_array(0);
-            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);   // position
+            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0); // position
             gl.enable_vertex_attrib_array(1);
-            gl.vertex_attrib_pointer_f32(1, 3, glow::FLOAT, false, stride, 8);   // colour
+            gl.vertex_attrib_pointer_f32(1, 3, glow::FLOAT, false, stride, 8); // colour
             gl.enable_vertex_attrib_array(2);
-            gl.vertex_attrib_pointer_f32(2, 2, glow::FLOAT, false, stride, 20);  // texcoord
+            gl.vertex_attrib_pointer_f32(2, 2, glow::FLOAT, false, stride, 20); // texcoord
             gl.enable_vertex_attrib_array(3);
-            gl.vertex_attrib_pointer_f32(3, 2, glow::FLOAT, false, stride, 28);  // clut
+            gl.vertex_attrib_pointer_f32(3, 2, glow::FLOAT, false, stride, 28); // clut
 
             gl.bind_vertex_array(None);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
@@ -223,6 +271,7 @@ impl OpenGlBackend {
                 window_width: 1024,
                 window_height: 512,
                 vram_transfer: None,
+                vram_read_transfer: None,
             }
         }
     }
@@ -258,35 +307,19 @@ impl FlatGlVertex {
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct TexturedGlVertex {
-    pub x: f32,           // position
+    pub x: f32, // position
     pub y: f32,
-    pub r: f32,           // colour
+    pub r: f32, // colour
     pub g: f32,
     pub b: f32,
-    pub u: f32,           // texcoord in VRAM space
+    pub u: f32, // texcoord in VRAM space
     pub v: f32,
-    pub clut_x: f32,      // CLUT location in VRAM
+    pub clut_x: f32, // CLUT location in VRAM
     pub clut_y: f32,
 }
 
 unsafe impl bytemuck::Pod for TexturedGlVertex {}
 unsafe impl bytemuck::Zeroable for TexturedGlVertex {}
-
-impl TexturedGlVertex {
-    fn new(x: i16, y: i16, colour: Colour, texcoord: Texcoord, clut: Clut) -> Self {
-        Self {
-            x: x as f32,
-            y: y as f32,
-            r: colour.r as f32,
-            g: colour.g as f32,
-            b: colour.b as f32,
-            u: texcoord.u as f32,
-            v: texcoord.v as f32,
-            clut_x: clut.x as f32,
-            clut_y: clut.y as f32,
-        }
-    }
-}
 
 impl OpenGlBackend {
     fn setup_blend(&self, semi_transparent: bool, mode: u8) {
@@ -300,7 +333,8 @@ impl OpenGlBackend {
                 0 => {
                     // 0.5*B + 0.5*F — but respect per-pixel alpha
                     self.gl.blend_equation(glow::FUNC_ADD);
-                    self.gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+                    self.gl
+                        .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
                 }
                 1 => {
                     self.gl.blend_equation(glow::FUNC_ADD);
@@ -314,26 +348,28 @@ impl OpenGlBackend {
                     self.gl.blend_equation(glow::FUNC_ADD);
                     self.gl.blend_func(glow::SRC_ALPHA, glow::ONE);
                 }
-                _ => unreachable!()
+                _ => unreachable!(),
             }
         }
     }
 
     fn submit_flat(&mut self, verts: &[FlatGlVertex], mode: u32) {
         unsafe {
-            self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.vram_framebuffer));
+            self.gl
+                .bind_framebuffer(glow::FRAMEBUFFER, Some(self.vram_framebuffer));
             self.gl.viewport(0, 0, 1024, 512);
 
             self.gl.use_program(Some(self.flat_program));
             self.gl.bind_vertex_array(Some(self.vertex_array));
 
             // upload vertices — VAO already knows the layout
-            self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vertex_buffer));
+            self.gl
+                .bind_buffer(glow::ARRAY_BUFFER, Some(self.vertex_buffer));
             let bytes = bytemuck::cast_slice(verts);
-            self.gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STREAM_DRAW);
+            self.gl
+                .buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STREAM_DRAW);
 
             self.gl.draw_arrays(mode, 0, verts.len() as i32);
-            let status = self.gl.check_framebuffer_status(glow::FRAMEBUFFER);
             check_gl_errors(&self.gl, "submit_flat");
         }
     }
@@ -350,11 +386,14 @@ impl OpenGlBackend {
         let ox = params.drawing_offset.x;
         let oy = params.drawing_offset.y;
 
-        self.submit_flat(&[
-            FlatGlVertex::new(v0.vertex.x + ox, v0.vertex.y + oy, colour),
-            FlatGlVertex::new(v1.vertex.x + ox, v1.vertex.y + oy, colour),
-            FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, colour),
-        ], glow::TRIANGLES);
+        self.submit_flat(
+            &[
+                FlatGlVertex::new(v0.vertex.x + ox, v0.vertex.y + oy, colour),
+                FlatGlVertex::new(v1.vertex.x + ox, v1.vertex.y + oy, colour),
+                FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, colour),
+            ],
+            glow::TRIANGLES,
+        );
     }
 
     fn draw_shaded_triangle(
@@ -374,7 +413,7 @@ impl OpenGlBackend {
                 FlatGlVertex::new(v1.vertex.x + ox, v1.vertex.y + oy, v1.colour),
                 FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, v2.colour),
             ],
-            glow::TRIANGLES
+            glow::TRIANGLES,
         );
     }
 
@@ -392,46 +431,81 @@ impl OpenGlBackend {
         let oy = params.drawing_offset.y;
 
         // PS1 splits quads as (v0,v1,v2) and (v1,v2,v3)
-        self.submit_flat(&[
-            FlatGlVertex::new(v0.vertex.x + ox, v0.vertex.y + oy, colour),
-            FlatGlVertex::new(v1.vertex.x + ox, v1.vertex.y + oy, colour),
-            FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, colour),
-            FlatGlVertex::new(v1.vertex.x + ox, v1.vertex.y + oy, colour),
-            FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, colour),
-            FlatGlVertex::new(v3.vertex.x + ox, v3.vertex.y + oy, colour),
-        ], glow::TRIANGLES);
+        self.submit_flat(
+            &[
+                FlatGlVertex::new(v0.vertex.x + ox, v0.vertex.y + oy, colour),
+                FlatGlVertex::new(v1.vertex.x + ox, v1.vertex.y + oy, colour),
+                FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, colour),
+                FlatGlVertex::new(v1.vertex.x + ox, v1.vertex.y + oy, colour),
+                FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, colour),
+                FlatGlVertex::new(v3.vertex.x + ox, v3.vertex.y + oy, colour),
+            ],
+            glow::TRIANGLES,
+        );
     }
 
-    fn submit_textured(&mut self, verts: &[TexturedGlVertex], mode: u32, tex_depth: i32, tex_x: f32, tex_y: f32,
-        semi_transparent: bool, semi_transparency_mode: u8) {
+    fn submit_textured(
+        &mut self,
+        verts: &[TexturedGlVertex],
+        mode: u32,
+        tex_depth: i32,
+        tex_x: f32,
+        tex_y: f32,
+        semi_transparent: bool,
+        semi_transparency_mode: u8,
+        texture_window: &TextureWindow,
+    ) {
         unsafe {
-            self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.vram_framebuffer));
+            self.gl
+                .bind_framebuffer(glow::FRAMEBUFFER, Some(self.vram_framebuffer));
             self.gl.viewport(0, 0, 1024, 512);
             self.gl.use_program(Some(self.textured_program));
 
             self.gl.active_texture(glow::TEXTURE0);
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
+            self.gl
+                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
             self.gl.uniform_1_i32(
-                self.gl.get_uniform_location(self.textured_program, "vram").as_ref(),
+                self.gl
+                    .get_uniform_location(self.textured_program, "vram")
+                    .as_ref(),
                 0,
             );
             self.gl.uniform_1_i32(
-                self.gl.get_uniform_location(self.textured_program, "is_semi_transparent").as_ref(),
+                self.gl
+                    .get_uniform_location(self.textured_program, "is_semi_transparent")
+                    .as_ref(),
                 semi_transparent as i32,
             );
 
             self.gl.uniform_2_f32(
-                self.gl.get_uniform_location(self.textured_program, "tex_page").as_ref(),
-                tex_x, tex_y,
+                self.gl
+                    .get_uniform_location(self.textured_program, "tex_page")
+                    .as_ref(),
+                tex_x,
+                tex_y,
+            );
+
+            self.gl.uniform_4_f32(
+                self.gl
+                    .get_uniform_location(self.textured_program, "tex_window")
+                    .as_ref(),
+                (texture_window.texture_window_mask_x as f32) * 8.0,
+                (texture_window.texture_window_mask_y as f32) * 8.0,
+                (texture_window.texture_window_offset_x as f32) * 8.0,
+                (texture_window.texture_window_offset_y as f32) * 8.0,
             );
 
             self.gl.bind_vertex_array(Some(self.textured_vertex_array));
-            self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.textured_vertex_buffer));
+            self.gl
+                .bind_buffer(glow::ARRAY_BUFFER, Some(self.textured_vertex_buffer));
             let bytes = bytemuck::cast_slice(verts);
-            self.gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STREAM_DRAW);
+            self.gl
+                .buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STREAM_DRAW);
 
             self.gl.uniform_1_i32(
-                self.gl.get_uniform_location(self.textured_program, "tex_depth").as_ref(),
+                self.gl
+                    .get_uniform_location(self.textured_program, "tex_depth")
+                    .as_ref(),
                 tex_depth,
             );
 
@@ -439,7 +513,8 @@ impl OpenGlBackend {
             self.gl.disable(glow::CULL_FACE);
             self.gl.enable(glow::BLEND);
             self.gl.blend_equation(glow::FUNC_ADD);
-            self.gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            self.gl
+                .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             self.gl.draw_arrays(mode, 0, verts.len() as i32);
 
             check_gl_errors(&self.gl, "submit_textured");
@@ -461,7 +536,11 @@ impl OpenGlBackend {
 
         // Texpage offset in VRAM pixels
         let tex_x = (texture_params.tex_page.x as f32) * 64.0;
-        let tex_y = if texture_params.tex_page.y { 256.0 } else { 0.0 };
+        let tex_y = if texture_params.tex_page.y {
+            256.0
+        } else {
+            0.0
+        };
 
         // For each vertex lets make a quick func to convert it
         let make_vert = |v: TexturedVertex| TexturedGlVertex {
@@ -472,114 +551,408 @@ impl OpenGlBackend {
             b: colour.b as f32,
             u: v.texcoord.u as f32,
             v: v.texcoord.v as f32,
-            clut_x: texture_params.clut.x as f32 * 16.0,  // CLUT x is in 16-pixel units
+            clut_x: texture_params.clut.x as f32 * 16.0, // CLUT x is in 16-pixel units
             clut_y: texture_params.clut.y as f32,
         };
 
         let tex_depth = texture_params.tex_page.colour_depth as i32;
 
-        self.submit_textured(&[
-                make_vert(v0),
-                make_vert(v1),
-                make_vert(v2),
-            ], glow::TRIANGLES, tex_depth, tex_x, tex_y, 
-            semi_transparent, texture_params.tex_page.semi_transparency
+        self.submit_textured(
+            &[make_vert(v0), make_vert(v1), make_vert(v2)],
+            glow::TRIANGLES,
+            tex_depth,
+            tex_x,
+            tex_y,
+            semi_transparent,
+            texture_params.tex_page.semi_transparency,
+            &params.texture_window,
+        );
+    }
+
+    fn draw_textured_rect(
+        &mut self,
+        pos: Vertex,
+        size_w: i16,
+        size_h: i16,
+        texcoord: Texcoord,
+        clut: Clut,
+        colour: Colour,
+        raw_texture: bool,
+        semi_transparent: bool,
+        params: &DrawParams,
+    ) {
+        let mode = &params.draw_mode;
+
+        let tex_x = mode.texture_base_x as f32 * 64.0;
+        let tex_y = if mode.texture_base_y { 256.0 } else { 0.0 };
+        let tex_depth = mode.texture_page_colours as i32;
+
+        let ox = params.drawing_offset.x;
+        let oy = params.drawing_offset.y;
+
+        let u0 = texcoord.u as f32;
+        let v0 = texcoord.v as f32;
+        let u1 = u0 + size_w as f32;
+        let v1 = v0 + size_h as f32;
+
+        // Handle GP1/E1h flip flags by swapping the u/v range
+        let (u0, u1) = if mode.textured_rectangle_flip_x {
+            (u1, u0)
+        } else {
+            (u0, u1)
+        };
+        let (v0, v1) = if mode.textured_rectangle_flip_y {
+            (v1, v0)
+        } else {
+            (v0, v1)
+        };
+
+        let x0 = pos.x;
+        let y0 = pos.y;
+        let x1 = x0 + size_w;
+        let y1 = y0 + size_h;
+
+        let make_vert = |x: i16, y: i16, u: f32, v: f32| TexturedGlVertex {
+            x: (x + ox) as f32,
+            y: (y + oy) as f32,
+            r: colour.r as f32,
+            g: colour.g as f32,
+            b: colour.b as f32,
+            u,
+            v,
+            clut_x: clut.x as f32 * 16.0,
+            clut_y: clut.y as f32,
+        };
+
+        let verts = [
+            make_vert(x0, y0, u0, v0),
+            make_vert(x1, y0, u1, v0),
+            make_vert(x0, y1, u0, v1),
+            make_vert(x1, y0, u1, v0),
+            make_vert(x0, y1, u0, v1),
+            make_vert(x1, y1, u1, v1),
+        ];
+
+        self.submit_textured(
+            &verts,
+            glow::TRIANGLES,
+            tex_depth,
+            tex_x,
+            tex_y,
+            semi_transparent,
+            mode.semi_transparency,
+            &params.texture_window,
         );
     }
 }
 
 impl GpuBackend for OpenGlBackend {
-	fn draw_polygon(&mut self, polygon: &Polygon, params: &DrawParams) {
-		match polygon {
-			Polygon::Monochrome { colour, vertices, semi_transparent } => {
-				vertices.triangles(|v0, v1, v2| {
-					self.draw_flat_triangle(v0, v1, v2, *colour, *semi_transparent, params);
-				});
-			}
-            Polygon::Shaded { vertices, semi_transparent } => {
+    fn draw_polygon(&mut self, polygon: &Polygon, params: &DrawParams) {
+        match polygon {
+            Polygon::Monochrome {
+                colour,
+                vertices,
+                semi_transparent,
+            } => {
+                vertices.triangles(|v0, v1, v2| {
+                    self.draw_flat_triangle(v0, v1, v2, *colour, *semi_transparent, params);
+                });
+            }
+            Polygon::Shaded {
+                vertices,
+                semi_transparent,
+            } => {
                 vertices.triangles(|v0, v1, v2| {
                     self.draw_shaded_triangle(v0, v1, v2, *semi_transparent, params);
                 });
             }
-            Polygon::Textured { colour, texture_params, vertices, semi_transparent } => {
+            Polygon::Textured {
+                colour,
+                texture_params,
+                vertices,
+                semi_transparent,
+            } => {
                 vertices.triangles(|v0, v1, v2| {
-                    self.draw_textured_triangle(v0, v1, v2, *colour, texture_params, *semi_transparent, params);
+                    self.draw_textured_triangle(
+                        v0,
+                        v1,
+                        v2,
+                        *colour,
+                        texture_params,
+                        *semi_transparent,
+                        params,
+                    );
                 });
             }
-			_ => { println!("draw_polygon: {:#?}\nparams: {:#?}", polygon, params); }
-		}
-	}
+            _ => {
+                println!("draw_polygon: {:#?}\nparams: {:#?}", polygon, params);
+            }
+        }
+    }
 
-	fn draw_line(&mut self, line: &Line, params: &DrawParams) {
-		println!("draw_line: {:#?}\nparams: {:#?}", line, params);
-	}
+    fn draw_line(&mut self, line: &Line, params: &DrawParams) {
+        println!("draw_line: {:#?}\nparams: {:#?}", line, params);
+    }
 
-	fn draw_rect(&mut self, rect: &Rect, params: &DrawParams) {
-        let flat = |x, y| FlatVertex { vertex: Vertex { x, y } };
-        let yellow = Colour { r: 255, g: 255, b: 0 };
-        // self.draw_flat_quad(flat(0, 0), flat(500, 100), flat(100, 400), flat(500, 400), yellow, false, params);
-
-		match rect {
-            Rect::Monochrome { colour, pos, size, semi_transparent } => {
+    fn draw_rect(&mut self, rect: &Rect, params: &DrawParams) {
+        match rect {
+            Rect::Monochrome {
+                colour,
+                pos,
+                size,
+                semi_transparent,
+            } => {
                 let (w, h) = match size {
                     RectSize::Variable { w, h } => (*w as i16, *h as i16),
-                    RectSize::Fixed1x1   => (1, 1),
-                    RectSize::Fixed8x8   => (8, 8),
+                    RectSize::Fixed1x1 => (1, 1),
+                    RectSize::Fixed8x8 => (8, 8),
                     RectSize::Fixed16x16 => (16, 16),
                 };
                 let x0 = pos.x;
                 let y0 = pos.y;
                 let x1 = x0 + w;
                 let y1 = y0 + h;
-                let flat = |x, y| FlatVertex { vertex: Vertex { x, y } };
+                let flat = |x, y| FlatVertex {
+                    vertex: Vertex { x, y },
+                };
                 self.draw_flat_quad(
-                    flat(x0, y0), flat(x1, y0),
-                    flat(x0, y1), flat(x1, y1),
-                    *colour, *semi_transparent, params,
+                    flat(x0, y0),
+                    flat(x1, y0),
+                    flat(x0, y1),
+                    flat(x1, y1),
+                    *colour,
+                    *semi_transparent,
+                    params,
                 );
             }
-            _ => eprintln!("draw_rect variant not implemented: {rect:#?}"),
+            Rect::Textured {
+                colour,
+                pos,
+                size,
+                texcoord,
+                semi_transparent,
+                clut,
+                raw,
+            } => {
+                let (w, h) = match size {
+                    RectSize::Variable { w, h } => (*w as i16, *h as i16),
+                    RectSize::Fixed1x1 => (1, 1),
+                    RectSize::Fixed8x8 => (8, 8),
+                    RectSize::Fixed16x16 => (16, 16),
+                };
+                self.draw_textured_rect(
+                    *pos,
+                    w,
+                    h,
+                    *texcoord,
+                    *clut,
+                    *colour,
+                    *raw,
+                    *semi_transparent,
+                    params,
+                );
+            }
         }
-	}
+    }
 
-	fn fill_rect(&mut self, pos: Vertex, w: u16, h: u16, colour: Colour) {
-		println!("fill_rect: {:#?}, w: {}, h: {}, colour: {:#?}", pos, w, h, colour);
-	}
+    fn fill_rect(&mut self, pos: Vertex, w: u16, h: u16, colour: Colour) {
+        let x0 = pos.x;
+        let y0 = pos.y;
+        let x1 = x0 + w as i16;
+        let y1 = y0 + h as i16;
 
-	fn clear_cache(&mut self) {
-		println!("clear_cache");
-	}
+        let flat = |x, y| FlatGlVertex::new(x, y, colour);
 
-	fn copy_rect(&mut self, src_x: u16, src_y: u16, dst_x: u16, dst_y: u16, w: u16, h: u16, mask: &Mask) {
-		println!("copy_rect: src_x: {}, src_y: {}, dst_x: {}, dst_y: {}, w: {}, h: {}, mask: {:#?}", src_x, src_y, dst_x, dst_y, w, h, mask);
-	}
+        // No drawing offset, no clip, no semi-transparency — fill_rect bypasses all of that
+        self.submit_flat(
+            &[
+                flat(x0, y0),
+                flat(x1, y0),
+                flat(x0, y1),
+                flat(x1, y0),
+                flat(x0, y1),
+                flat(x1, y1),
+            ],
+            glow::TRIANGLES,
+        );
+    }
 
-	fn vram_read_begin(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16) {
-		println!("vram_read_begin: {}, {}, {}, {}", vram_x, vram_y, w, h);
-	}
+    fn clear_cache(&mut self) {
+        // println!("clear_cache");
+    }
 
-	fn vram_read(&mut self) -> Option<u32> {
-		println!("vram_read");
-		None
-	}
+    fn copy_rect(
+        &mut self,
+        src_x: u16,
+        src_y: u16,
+        dst_x: u16,
+        dst_y: u16,
+        w: u16,
+        h: u16,
+        mask: &Mask,
+    ) {
+        unsafe {
+            // Read from vram_texture_fbo (more up to date)
+            let mut full_rgba = vec![0u8; 1024 * 512 * 4];
+            self.gl
+                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture_fbo));
+            self.gl.get_tex_image(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(&mut full_rgba),
+            );
 
-	fn vram_write_begin(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16, mask: &Mask) {
+            // Decode RGBA8 to BGR555 (R16UI) for the region to copy
+            let mut region = vec![0u16; w as usize * h as usize];
+            for row in 0..h as usize {
+                for col in 0..w as usize {
+                    let sx = (src_x as usize + col) % 1024;
+                    let sy = (src_y as usize + row) % 512;
+                    let idx = (sy * 1024 + sx) * 4;
+                    let r = (full_rgba[idx] >> 3) as u16;
+                    let g = (full_rgba[idx + 1] >> 3) as u16;
+                    let b = (full_rgba[idx + 2] >> 3) as u16;
+                    region[row * w as usize + col] = r | (g << 5) | (b << 10);
+                }
+            }
+
+            // TODO: check_mask_before_draw
+
+            if mask.set_mask_while_drawing {
+                for p in region.iter_mut() {
+                    *p |= 0x8000;
+                }
+            }
+
+            // Write to vram_texture (R16UI)
+            self.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+            self.gl
+                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
+            self.gl.tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                dst_x as i32,
+                dst_y as i32,
+                w as i32,
+                h as i32,
+                glow::RED_INTEGER,
+                glow::UNSIGNED_SHORT,
+                glow::PixelUnpackData::Slice(bytemuck::cast_slice(&region)),
+            );
+
+            // Write to vram_texture_fbo (RGBA8)
+            let rgba: Vec<u8> = region
+                .iter()
+                .flat_map(|&p| {
+                    let r = ((p & 0x001F) << 3) as u8;
+                    let g = (((p >> 5) & 0x1F) << 3) as u8;
+                    let b = (((p >> 10) & 0x1F) << 3) as u8;
+                    [r, g, b, 255u8]
+                })
+                .collect();
+
+            self.gl
+                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture_fbo));
+            self.gl.tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                dst_x as i32,
+                dst_y as i32,
+                w as i32,
+                h as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(&rgba),
+            );
+
+            check_gl_errors(&self.gl, "copy_rect");
+        }
+    }
+
+    fn vram_read_begin(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16) {
+        unsafe {
+            let mut full_rgba = vec![0u8; 1024 * 512 * 4];
+
+            self.gl
+                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture_fbo));
+            self.gl.get_tex_image(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(&mut full_rgba),
+            );
+
+            let mut pixels = vec![0u16; w as usize * h as usize];
+            for row in 0..h as usize {
+                for col in 0..w as usize {
+                    let src_x = vram_x as usize + col;
+                    let src_y = vram_y as usize + row;
+                    let idx = (src_y * 1024 + src_x) * 4;
+                    let r = full_rgba[idx] >> 3;
+                    let g = full_rgba[idx + 1] >> 3;
+                    let b = full_rgba[idx + 2] >> 3;
+                    pixels[row * w as usize + col] =
+                        (r as u16) | ((g as u16) << 5) | ((b as u16) << 10);
+                }
+            }
+
+            check_gl_errors(&self.gl, "vram_read_begin");
+
+            self.vram_read_transfer = Some(VramReadTransfer {
+                x: vram_x,
+                y: vram_y,
+                w,
+                h,
+                pixels,
+                cursor: 0,
+            });
+        }
+    }
+
+    fn vram_read(&mut self) -> Option<u32> {
+        // return Some(0x12345678u32);
+        let transfer = self.vram_read_transfer.as_mut()?;
+
+        let lo = transfer.pixels.get(transfer.cursor).copied().unwrap_or(0);
+        transfer.cursor += 1;
+        let hi = transfer.pixels.get(transfer.cursor).copied().unwrap_or(0);
+        transfer.cursor += 1;
+
+        let word = (lo as u32) | ((hi as u32) << 16);
+
+        if transfer.cursor >= transfer.pixels.len() {
+            self.vram_read_transfer = None;
+        }
+
+        Some(word)
+    }
+
+    fn vram_write_begin(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16, mask: &Mask) {
         self.vram_transfer = Some(VramTransfer {
-            x: vram_x, y: vram_y,
-            w, h,
+            x: vram_x,
+            y: vram_y,
+            w,
+            h,
             current_x: vram_x,
             current_y: vram_y,
             pixels: Vec::with_capacity(w as usize * h as usize),
         });
-	}
+    }
 
     fn vram_write(&mut self, word: u32) {
-        let Some(transfer) = &mut self.vram_transfer else { return };
+        let Some(transfer) = &mut self.vram_transfer else {
+            return;
+        };
 
         for pixel in [word as u16, (word >> 16) as u16] {
-            if transfer.current_y >= transfer.y + transfer.h { break; }
+            if transfer.current_y >= transfer.y + transfer.h {
+                break;
+            }
 
-            transfer.pixels.push(pixel);  // raw BGR555, no decode
+            transfer.pixels.push(pixel); // raw BGR555, no decode
 
             transfer.current_x += 1;
             if transfer.current_x >= transfer.x + transfer.w {
@@ -597,31 +970,46 @@ impl GpuBackend for OpenGlBackend {
             let pixels_u16 = transfer.pixels.clone();
 
             // decode BGR555 -> RGBA8 for fbo texture
-            let pixels_rgba: Vec<u8> = pixels_u16.iter().flat_map(|&p| {
-                let r = ((p & 0x001F) << 3) as u8;
-                let g = (((p >> 5) & 0x1F) << 3) as u8;
-                let b = (((p >> 10) & 0x1F) << 3) as u8;
-                [r, g, b, 255u8]
-            }).collect();
+            let pixels_rgba: Vec<u8> = pixels_u16
+                .iter()
+                .flat_map(|&p| {
+                    let r = ((p & 0x001F) << 3) as u8;
+                    let g = (((p >> 5) & 0x1F) << 3) as u8;
+                    let b = (((p >> 10) & 0x1F) << 3) as u8;
+                    [r, g, b, 255u8]
+                })
+                .collect();
 
             self.vram_transfer = None;
 
             unsafe {
                 // upload raw u16 to vram_texture
-                self.gl.bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
+                self.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 2);
+                self.gl
+                    .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
                 self.gl.tex_sub_image_2d(
-                    glow::TEXTURE_2D, 0,
-                    x, y, w, h,
+                    glow::TEXTURE_2D,
+                    0,
+                    x,
+                    y,
+                    w,
+                    h,
                     glow::RED_INTEGER,
                     glow::UNSIGNED_SHORT,
                     glow::PixelUnpackData::Slice(bytemuck::cast_slice(&pixels_u16)),
                 );
+                self.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
 
                 // upload decoded RGBA8 to vram_fbo_texture
-                self.gl.bind_texture(glow::TEXTURE_2D, Some(self.vram_texture_fbo));
+                self.gl
+                    .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture_fbo));
                 self.gl.tex_sub_image_2d(
-                    glow::TEXTURE_2D, 0,
-                    x, y, w, h,
+                    glow::TEXTURE_2D,
+                    0,
+                    x,
+                    y,
+                    w,
+                    h,
                     glow::RGBA,
                     glow::UNSIGNED_BYTE,
                     glow::PixelUnpackData::Slice(&pixels_rgba),
@@ -631,23 +1019,23 @@ impl GpuBackend for OpenGlBackend {
             }
         }
     }
-	
-	fn present(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16) {
-        // let vram_x = 0u16;
-        // let vram_y = 0u16;
-        // let w = 1024u16;
-        // let h = 512u16;
-		unsafe {
+
+    fn present(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16) {
+        // let vram_x = 0;
+        // let vram_y = 0;
+        // let w = 1024;
+        // let h = 512;
+        unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            
+
             // get actual window size
             let win_w = self.window_width as f32;
             let win_h = self.window_height as f32;
-            
+
             // compute letterbox — fit w x h into window keeping aspect ratio
             let src_aspect = w as f32 / h as f32;
             let win_aspect = win_w / win_h;
-            
+
             let (dest_w, dest_h, dest_x, dest_y) = if win_aspect > src_aspect {
                 // window is wider — pillarbox (black bars on sides)
                 let scaled_w = win_h * src_aspect;
@@ -661,32 +1049,42 @@ impl GpuBackend for OpenGlBackend {
             };
 
             // set viewport to full window, clear to black
-            self.gl.viewport(0, 0, self.window_width as i32, self.window_height as i32);
+            self.gl
+                .viewport(0, 0, self.window_width as i32, self.window_height as i32);
             self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
             self.gl.clear(glow::COLOR_BUFFER_BIT);
 
             // convert pixel coords to NDC
             let ndc_x = (dest_x / win_w) * 2.0 - 1.0;
-            let ndc_y = 1.0 - (dest_y / win_h) * 2.0;  // flip Y
+            let ndc_y = 1.0 - (dest_y / win_h) * 2.0; // flip Y
             let ndc_w = (dest_w / win_w) * 2.0;
             let ndc_h = (dest_h / win_h) * 2.0;
 
             self.gl.use_program(Some(self.present_program));
             self.gl.active_texture(glow::TEXTURE0);
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(self.vram_texture_fbo));
+            self.gl
+                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture_fbo));
 
             let loc = |name| self.gl.get_uniform_location(self.present_program, name);
             self.gl.uniform_1_i32(loc("vram").as_ref(), 0);
-            self.gl.uniform_2_f32(loc("display_origin").as_ref(),
-                vram_x as f32 / 1024.0, vram_y as f32 / 512.0);
-            self.gl.uniform_2_f32(loc("display_size").as_ref(),
-                w as f32 / 1024.0, h as f32 / 512.0);
-            self.gl.uniform_2_f32(loc("screen_offset").as_ref(), ndc_x, ndc_y - ndc_h);
-            self.gl.uniform_2_f32(loc("screen_size").as_ref(), ndc_w, ndc_h);
+            self.gl.uniform_2_f32(
+                loc("display_origin").as_ref(),
+                vram_x as f32 / 1024.0,
+                vram_y as f32 / 512.0,
+            );
+            self.gl.uniform_2_f32(
+                loc("display_size").as_ref(),
+                w as f32 / 1024.0,
+                h as f32 / 512.0,
+            );
+            self.gl
+                .uniform_2_f32(loc("screen_offset").as_ref(), ndc_x, ndc_y - ndc_h);
+            self.gl
+                .uniform_2_f32(loc("screen_size").as_ref(), ndc_w, ndc_h);
 
             self.gl.bind_vertex_array(Some(self.present_vao));
             self.gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             check_gl_errors(&self.gl, "present");
         }
-	}
+    }
 }

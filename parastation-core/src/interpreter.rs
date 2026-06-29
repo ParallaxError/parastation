@@ -1,16 +1,16 @@
 /*
  * @file /parastation-core/src/interpreter.rs
  * @brief
- * Interpreter for the MIPS R3000A CPU of the PS1. The simplest possible backend, 
- * which fetches an instruction from memory, calls the decoder and executes the resulting IR 
+ * Interpreter for the MIPS R3000A CPU of the PS1. The simplest possible backend,
+ * which fetches an instruction from memory, calls the decoder and executes the resulting IR
  * operation, then repeats.
- * 
+ *
  * -----
  */
 
 use crate::backend::Backend;
+use crate::cpu::{Cop0Register, Cpu, MipsRegister, ir::IrOp};
 use crate::system_bus::SystemBus;
-use crate::cpu::{Cpu, ir::IrOp, MipsRegister, Cop0Register};
 
 pub struct Interpreter;
 
@@ -47,7 +47,7 @@ impl Interpreter {
             IrOp::Subu { dst, lhs, rhs } => self.op_subu(dst, lhs, rhs, cpu),
             IrOp::Addi { dst, src, imm } => self.op_addi(dst, src, imm, cpu),
             IrOp::Addiu { dst, src, imm } => self.op_addiu(dst, src, imm, cpu),
-            
+
             // Comparison instructions
             IrOp::Slt { dst, lhs, rhs } => self.op_slt(dst, lhs, rhs, cpu),
             IrOp::Sltu { dst, lhs, rhs } => self.op_sltu(dst, lhs, rhs, cpu),
@@ -105,13 +105,15 @@ impl Interpreter {
             IrOp::Mtc0 { src, cop_reg } => self.op_mtc0(src, cop_reg, cpu),
             IrOp::Mfc2 { dst, cop_reg } => self.op_mfc2(dst, cop_reg.0, cpu),
             IrOp::Mtc2 { src, cop_reg } => self.op_mtc2(src, cop_reg.0, cpu),
+            IrOp::Cfc2 { dst, cop_reg } => self.op_cfc2(dst, cop_reg.0, cpu),
+            IrOp::Ctc2 { src, cop_reg } => self.op_ctc2(src, cop_reg.0, cpu),
             IrOp::Cop2 { command } => self.op_cop2(command, cpu),
             IrOp::Lwc0 { dst, base, offset } => self.op_lwc0(dst, base, offset, cpu, bus),
             IrOp::Lwc2 { dst, base, offset } => self.op_lwc2(dst, base, offset, cpu, bus),
             IrOp::Swc0 { src, base, offset } => self.op_swc0(src, base, offset, cpu, bus),
             IrOp::Swc2 { src, base, offset } => self.op_swc2(src, base, offset, cpu, bus),
             IrOp::Rfe => self.op_rfe(cpu),
-            _ => unimplemented!("IR operation not implemented: {:?}", op)
+            _ => unimplemented!("IR operation not implemented: {:?}", op),
         }
     }
 }
@@ -121,13 +123,25 @@ impl Backend for Interpreter {
     fn step(&mut self, cpu: &mut Cpu, bus: &mut SystemBus) {
         // Commit load delay slot
         cpu.commit_load_delay();
-        // Unset branch delay 
+
+        // Check for pending interrupt before fetching the next instruction
+        // Only take it if we're not in a delay slot (can't safely interrupt mid branch) and interrupts are globally
+        // enabled (SR bit 0).
+        if !cpu.in_delay_slot()
+            && (cpu.read_cop0(Cop0Register(12)) & 1) != 0  // SR.IEc
+            && bus.interrupt_controller.pending()
+        {
+            self.trigger_exception_at(cpu, EXCEPTION_INT, cpu.pc(), false);
+            return;
+        }
+
+        // Unset branch delay
         cpu.set_in_delay_slot(false);
 
         // Check for an unaligned fetch, which raises an exception
         if cpu.pc() & 0x3 != 0 {
             cpu.write_cop0(Cop0Register(8), cpu.pc()); // BadVAddr
-            self.trigger_exception(cpu, EXCEPTION_AdEL); // Address error on fetch
+            self.trigger_exception(cpu, EXCEPTION_ADEL); // Address error on fetch
             return;
         }
 
@@ -138,7 +152,8 @@ impl Backend for Interpreter {
         // TTY check before advancing PC
         let pc = cpu.pc() & 0x1FFF_FFFF;
         if (pc == 0xA0 && cpu.read_reg(MipsRegister(9)) == 0x3C)
-        || (pc == 0xB0 && cpu.read_reg(MipsRegister(9)) == 0x3D) {
+            || (pc == 0xB0 && cpu.read_reg(MipsRegister(9)) == 0x3D)
+        {
             let ch = (cpu.read_reg(MipsRegister(4)) & 0xFF) as u8 as char;
             print!("{}", ch);
             use std::io::Write;
@@ -161,27 +176,48 @@ impl Backend for Interpreter {
 }
 
 // Load instructions
-// Load instructions have to populate the delay slot instead of writing directly to the register, 
+// Load instructions have to populate the delay slot instead of writing directly to the register,
 // since the PS1's CPU has a load delay of 1 instruction.
 impl Interpreter {
-    fn op_lb(&mut self, dst: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_lb(
+        &mut self,
+        dst: MipsRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
+    ) {
         let addr = cpu.read_reg(base).wrapping_add(offset as u32);
         let value = bus.read8(addr) as i8 as i32 as u32; // Sign-extend the byte
         cpu.set_load_delay(dst, value);
     }
 
-    fn op_lbu(&mut self, dst: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_lbu(
+        &mut self,
+        dst: MipsRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
+    ) {
         let addr = cpu.read_reg(base).wrapping_add(offset as u32);
         let value = bus.read8(addr) as u32; // Zero-extend the byte
         cpu.set_load_delay(dst, value);
     }
 
-    fn op_lh(&mut self, dst: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_lh(
+        &mut self,
+        dst: MipsRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
+    ) {
         let addr = cpu.read_reg(base).wrapping_add(offset as u32);
-        
+
         // Needs to be aligned, otherwise we raise an exception
         if addr % 2 != 0 {
-            self.trigger_exception(cpu, EXCEPTION_AdEL);
+            self.trigger_exception(cpu, EXCEPTION_ADEL);
             return;
         }
 
@@ -189,11 +225,18 @@ impl Interpreter {
         cpu.set_load_delay(dst, value);
     }
 
-    fn op_lhu(&mut self, dst: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_lhu(
+        &mut self,
+        dst: MipsRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
+    ) {
         let addr = cpu.read_reg(base).wrapping_add(offset as u32);
 
         if addr % 2 != 0 {
-            self.trigger_exception(cpu, EXCEPTION_AdEL);
+            self.trigger_exception(cpu, EXCEPTION_ADEL);
             return;
         }
 
@@ -201,11 +244,19 @@ impl Interpreter {
         cpu.set_load_delay(dst, value);
     }
 
-    fn op_lw(&mut self, dst: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_lw(
+        &mut self,
+        dst: MipsRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
+    ) {
         let addr = cpu.read_reg(base).wrapping_add(offset as u32);
 
         if addr % 4 != 0 {
-            self.trigger_exception(cpu, EXCEPTION_AdEL);
+            println!("Unaligned load at address {:08X}, raising exception", addr);
+            self.trigger_exception(cpu, EXCEPTION_ADEL);
             return;
         }
 
@@ -218,7 +269,14 @@ impl Interpreter {
 // Store instructions should be ignored if the cache is isolated, indicated by Cop0Register 12
 const CACHE_ISOLATION_BIT: u32 = 0x10000;
 impl Interpreter {
-    fn op_sb(&mut self, src: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_sb(
+        &mut self,
+        src: MipsRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
+    ) {
         // Ignore writes when cache is isolated
         if cpu.read_cop0(Cop0Register(12)) & CACHE_ISOLATION_BIT != 0 {
             return;
@@ -229,7 +287,14 @@ impl Interpreter {
         bus.write8(addr, val);
     }
 
-    fn op_sh(&mut self, src: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_sh(
+        &mut self,
+        src: MipsRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
+    ) {
         // Ignore writes when cache is isolated
         if cpu.read_cop0(Cop0Register(12)) & CACHE_ISOLATION_BIT != 0 {
             return;
@@ -239,7 +304,7 @@ impl Interpreter {
 
         // Check alignment, throw exception if not aligned
         if addr % 2 != 0 {
-            self.trigger_exception(cpu, EXCEPTION_AdES);
+            self.trigger_exception(cpu, EXCEPTION_ADES);
             return;
         }
 
@@ -247,7 +312,14 @@ impl Interpreter {
         bus.write16(addr, val as u16);
     }
 
-    fn op_sw(&mut self, src: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_sw(
+        &mut self,
+        src: MipsRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
+    ) {
         // Ignore writes when cache is isolated
         if cpu.read_cop0(Cop0Register(12)) & CACHE_ISOLATION_BIT != 0 {
             return;
@@ -257,7 +329,7 @@ impl Interpreter {
 
         // Check alignment, throw exception if not aligned
         if addr % 4 != 0 {
-            self.trigger_exception(cpu, EXCEPTION_AdES);
+            self.trigger_exception(cpu, EXCEPTION_ADES);
             return;
         }
 
@@ -269,7 +341,14 @@ impl Interpreter {
 
 // Unaligned load/store instructions
 impl Interpreter {
-    fn op_lwl(&mut self, dst: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_lwl(
+        &mut self,
+        dst: MipsRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
+    ) {
         let addr = cpu.read_reg(base).wrapping_add(offset as u32);
         let aligned_addr = addr & !0x3;
         let word = bus.read32(aligned_addr);
@@ -286,7 +365,14 @@ impl Interpreter {
         cpu.set_load_delay(dst, value);
     }
 
-    fn op_lwr(&mut self, dst: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_lwr(
+        &mut self,
+        dst: MipsRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
+    ) {
         let addr = cpu.read_reg(base).wrapping_add(offset as u32);
         let aligned_addr = addr & !0x3;
         let word = bus.read32(aligned_addr);
@@ -303,7 +389,14 @@ impl Interpreter {
         cpu.set_load_delay(dst, value);
     }
 
-    fn op_swl(&mut self, src: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_swl(
+        &mut self,
+        src: MipsRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
+    ) {
         let addr = cpu.read_reg(base).wrapping_add(offset as u32);
         let aligned_addr = addr & !0x3;
         let word = bus.read32(aligned_addr);
@@ -320,7 +413,14 @@ impl Interpreter {
         bus.write32(aligned_addr, value);
     }
 
-    fn op_swr(&mut self, src: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_swr(
+        &mut self,
+        src: MipsRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
+    ) {
         let addr = cpu.read_reg(base).wrapping_add(offset as u32);
         let aligned_addr = addr & !0x3;
         let word = bus.read32(aligned_addr);
@@ -347,7 +447,7 @@ impl Interpreter {
         let rhs_val = rhs_raw as i32;
         match lhs_val.checked_add(rhs_val) {
             Some(result) => cpu.write_reg(dst, result as u32),
-            None => self.trigger_exception(cpu, EXCEPTION_Ov),
+            None => self.trigger_exception(cpu, EXCEPTION_OV),
         }
     }
 
@@ -363,7 +463,7 @@ impl Interpreter {
         let rhs_val = cpu.read_reg(rhs) as i32;
         match lhs_val.checked_sub(rhs_val) {
             Some(result) => cpu.write_reg(dst, result as u32),
-            None => self.trigger_exception(cpu, EXCEPTION_Ov),
+            None => self.trigger_exception(cpu, EXCEPTION_OV),
         }
     }
 
@@ -378,10 +478,10 @@ impl Interpreter {
         let src_val = cpu.read_reg(src);
         match (src_val as i32).checked_add(imm as i32) {
             Some(result) => cpu.write_reg(dst, result as u32),
-            None => self.trigger_exception(cpu, EXCEPTION_Ov),
+            None => self.trigger_exception(cpu, EXCEPTION_OV),
         }
     }
-    
+
     fn op_addiu(&mut self, dst: MipsRegister, src: MipsRegister, imm: i16, cpu: &mut Cpu) {
         let src_val = cpu.read_reg(src);
         let result = src_val.wrapping_add(imm as u32);
@@ -471,21 +571,39 @@ impl Interpreter {
 
 // Shifting operations
 impl Interpreter {
-    fn op_sllv(&mut self, dst: MipsRegister, src: MipsRegister, shift: MipsRegister, cpu: &mut Cpu) {
+    fn op_sllv(
+        &mut self,
+        dst: MipsRegister,
+        src: MipsRegister,
+        shift: MipsRegister,
+        cpu: &mut Cpu,
+    ) {
         let src_val = cpu.read_reg(src);
         let shift_val = (cpu.read_reg(shift) & 0x1F) as u32; // Only use the lower 5 bits of the shift amount
         let result = src_val << shift_val;
         cpu.write_reg(dst, result);
     }
 
-    fn op_srlv(&mut self, dst: MipsRegister, src: MipsRegister, shift: MipsRegister, cpu: &mut Cpu) {
+    fn op_srlv(
+        &mut self,
+        dst: MipsRegister,
+        src: MipsRegister,
+        shift: MipsRegister,
+        cpu: &mut Cpu,
+    ) {
         let src_val = cpu.read_reg(src);
         let shift_val = (cpu.read_reg(shift) & 0x1F) as u32; // Only use the lower 5 bits of the shift amount
         let result = src_val >> shift_val; // Logical right shift
         cpu.write_reg(dst, result);
     }
 
-    fn op_srav(&mut self, dst: MipsRegister, src: MipsRegister, shift: MipsRegister, cpu: &mut Cpu) {
+    fn op_srav(
+        &mut self,
+        dst: MipsRegister,
+        src: MipsRegister,
+        shift: MipsRegister,
+        cpu: &mut Cpu,
+    ) {
         let src_val = cpu.read_reg(src) as i32;
         let shift_val = (cpu.read_reg(shift) & 0x1F) as u32; // Only use the lower 5 bits of the shift amount
         let result = (src_val >> shift_val) as u32; // Arithmetic right shift
@@ -720,58 +838,59 @@ impl Interpreter {
 // Exception cause constants
 // https://problemkaputt.de/psx-spx.htm#cop0exceptionhandling
 const EXCEPTION_INT: u8 = 0x0;
-const EXCEPTION_AdEL: u8 = 0x4;
-const EXCEPTION_AdES: u8 = 0x5;
+const EXCEPTION_ADEL: u8 = 0x4;
+const EXCEPTION_ADES: u8 = 0x5;
 const EXCEPTION_IBE: u8 = 0x6;
 const EXCEPTION_DBE: u8 = 0x7;
-const EXCEPTION_Syscall: u8 = 0x8;
+const EXCEPTION_SYSCALL: u8 = 0x8;
 const EXCEPTION_BP: u8 = 0x9;
 const EXCEPTION_RI: u8 = 0xA;
-const EXCEPTION_CpU: u8 = 0xB;
-const EXCEPTION_Ov: u8 = 0xC;
+const EXCEPTION_CPU: u8 = 0xB;
+const EXCEPTION_OV: u8 = 0xC;
 
 impl Interpreter {
     // https://github.com/simias/psx-guide/, section 2.71
-    fn trigger_exception(&mut self, cpu: &mut Cpu, cause: u8) {
-        // Figure out the cause and epc
+    fn trigger_exception_at(&mut self, cpu: &mut Cpu, cause: u8, epc: u32, in_delay_slot: bool) {
         let mut new_cause = cpu.read_cop0(Cop0Register(13));
-        new_cause &= !0x7C; // Clear bits 2-6
-        new_cause |= (cause as u32) << 2; // Set the cause code in bits 2-6
-        // Start by populating the EPC
-        // Populate with the branch if in a branch delay slot, otherwise current instruction
-        let epc = if cpu.in_delay_slot() {
-            // Need to set bit 31 of Cause register to indicate delay slot
+        new_cause &= !0x7C;
+        new_cause |= (cause as u32) << 2;
+
+        if in_delay_slot {
             new_cause |= 1 << 31;
-            cpu.current_pc().wrapping_sub(4)
         } else {
-            new_cause &= !(1 << 31); // Clear bit 31 if not in delay slot
-            cpu.current_pc()
-        };
+            new_cause &= !(1 << 31);
+        }
 
         cpu.write_cop0(Cop0Register(13), new_cause);
         cpu.write_cop0(Cop0Register(14), epc);
 
-        // Shift the SR mode bits
-        // This populates the previous mode, which we need when we return from the exception
         let sr = cpu.read_cop0(Cop0Register(12));
         let mode = sr & 0x3F;
         let new_sr = (sr & !0x3F) | ((mode << 2) & 0x3F);
         cpu.write_cop0(Cop0Register(12), new_sr);
 
-        // Jump to the exception vector without a branch delay
-        // If BEV bit is set in the SR, we use the BIOS vector, otherwise RAM vector
         let vector = if sr & (1 << 22) != 0 {
             0xBFC0_0180
         } else {
             0x8000_0080
         };
-
         cpu.set_pc(vector);
         cpu.set_next_pc(vector.wrapping_add(4));
     }
 
+    fn trigger_exception(&mut self, cpu: &mut Cpu, cause: u8) {
+        // Other exceptions happen mid instruction, so need to check if we are in a delay slot to set the EPC correctly
+        // current_pc is correctly the instruction that caused it
+        let epc = if cpu.in_delay_slot() {
+            cpu.current_pc().wrapping_sub(4)
+        } else {
+            cpu.current_pc()
+        };
+        self.trigger_exception_at(cpu, cause, epc, cpu.in_delay_slot());
+    }
+
     fn op_syscall(&mut self, cpu: &mut Cpu) {
-        self.trigger_exception(cpu, EXCEPTION_Syscall);
+        self.trigger_exception(cpu, EXCEPTION_SYSCALL);
     }
 
     fn op_break(&mut self, cpu: &mut Cpu) {
@@ -786,8 +905,8 @@ impl Interpreter {
         cpu.set_load_delay(dst, value);
     }
 
-    fn op_mfc2(&mut self, dst: MipsRegister, cop_reg: u8, cpu: &mut Cpu) {
-        unimplemented!("Coprocessor 2 is not implemented");
+    fn op_mfc2(&mut self, _dst: MipsRegister, _cop_reg: u8, _cpu: &mut Cpu) {
+        // unimplemented!("Coprocessor 2 is not implemented");
     }
 
     fn op_mtc0(&mut self, src: MipsRegister, cop_reg: Cop0Register, cpu: &mut Cpu) {
@@ -795,28 +914,64 @@ impl Interpreter {
         cpu.write_cop0(cop_reg, value);
     }
 
-    fn op_mtc2(&mut self, src: MipsRegister, cop_reg: u8, cpu: &mut Cpu) {
-        unimplemented!("Coprocessor 2 is not implemented");
+    fn op_mtc2(&mut self, _src: MipsRegister, _cop_reg: u8, _cpu: &mut Cpu) {
+        // unimplemented!("Coprocessor 2 is not implemented");
     }
 
-    fn op_cop2(&mut self, command: u32, cpu: &mut Cpu) {
-        unimplemented!("Coprocessor 2 is not implemented");
+    fn op_cfc2(&mut self, _dst: MipsRegister, _cop_reg: u8, _cpu: &mut Cpu) {
+        // eprintln!("Coprocessor 2 is not implemented");
     }
 
-    fn op_lwc0(&mut self, dst: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_ctc2(&mut self, _src: MipsRegister, _cop_reg: u8, _cpu: &mut Cpu) {
+        // eprintln!("Coprocessor 2 is not implemented");
+    }
+
+    fn op_cop2(&mut self, _command: u32, _cpu: &mut Cpu) {
+        // unimplemented!("Coprocessor 2 is not implemented");
+    }
+
+    fn op_lwc0(
+        &mut self,
+        _dst: MipsRegister,
+        _base: MipsRegister,
+        _offset: i16,
+        _cpu: &mut Cpu,
+        _bus: &mut SystemBus,
+    ) {
         unimplemented!("Coprocessor 0 load instructions are not implemented");
     }
 
-    fn op_lwc2(&mut self, dst: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
-        unimplemented!("Coprocessor 2 load instructions are not implemented");
+    fn op_lwc2(
+        &mut self,
+        _dst: MipsRegister,
+        _base: MipsRegister,
+        _offset: i16,
+        _cpu: &mut Cpu,
+        _bus: &mut SystemBus,
+    ) {
+        // unimplemented!("Coprocessor 2 load instructions are not implemented");
     }
 
-    fn op_swc0(&mut self, src: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
+    fn op_swc0(
+        &mut self,
+        _src: MipsRegister,
+        _base: MipsRegister,
+        _offset: i16,
+        _cpu: &mut Cpu,
+        _bus: &mut SystemBus,
+    ) {
         unimplemented!("Coprocessor 0 store instructions are not implemented");
     }
 
-    fn op_swc2(&mut self, src: MipsRegister, base: MipsRegister, offset: i16, cpu: &mut Cpu, bus: &mut SystemBus) {
-        unimplemented!("Coprocessor 2 store instructions are not implemented");
+    fn op_swc2(
+        &mut self,
+        _src: MipsRegister,
+        _base: MipsRegister,
+        _offset: i16,
+        _cpu: &mut Cpu,
+        _bus: &mut SystemBus,
+    ) {
+        // unimplemented!("Coprocessor 2 store instructions are not implemented");
     }
 
     fn op_rfe(&mut self, cpu: &mut Cpu) {

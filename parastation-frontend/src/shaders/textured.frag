@@ -3,6 +3,7 @@ uniform usampler2D vram;
 uniform int tex_depth;
 uniform vec2 tex_page;
 uniform bool is_semi_transparent;
+uniform vec4 tex_window;
 
 in vec3 frag_colour;
 in vec2 frag_texcoord;
@@ -22,7 +23,11 @@ vec4 bgr555_to_rgba(uint c) {
 }
 
 void main() {
-    ivec2 tex  = ivec2(frag_texcoord);
+    ivec2 mask   = ivec2(tex_window.xy);
+    ivec2 offset = ivec2(tex_window.zw);
+    ivec2 tex_raw = ivec2(frag_texcoord);
+    ivec2 tex = (tex_raw & (~mask)) | (offset & mask);
+
     ivec2 clut = ivec2(frag_clut);
     ivec2 page = ivec2(tex_page);
     uint raw;

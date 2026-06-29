@@ -1,34 +1,37 @@
 /*
  * @file /parastation-core/src/lib.rs
  * @brief
- * PS1 emulator core library. Exposes the top-level PS1 struct, which encapsulates all of the 
+ * PS1 emulator core library. Exposes the top-level PS1 struct, which encapsulates all of the
  * PS1s functionality and can be instantiated by the frontend.
- * 
+ *
  * -----
  */
 
 #![allow(dead_code)]
 
 // Modules
-mod scratchpad;
-mod interrupt_controller;
+mod backend;
 pub mod bios;
-mod ram;
+mod cd_rom;
+mod cpu;
 mod dma;
 pub mod gpu;
-mod memory_map;
-mod system_bus;
-mod backend;
-mod cpu;
 mod interpreter;
+mod interrupt_controller;
+mod memory_map;
+mod ram;
+mod scratchpad;
+mod system_bus;
 
-use interrupt_controller::Interrupt;
 pub use backend::Backend;
-pub use interpreter::Interpreter;
-pub use system_bus::SystemBus;
 pub use bios::Bios;
 pub use cpu::{Cpu, MipsRegister};
 pub use gpu::GpuBackend;
+pub use interpreter::Interpreter;
+use interrupt_controller::Interrupt;
+pub use system_bus::SystemBus;
+
+const VBLANK_CYCLES: u32 = 33867; // Number of cycles between VBlank interrupts
 
 /// Top-level PS1 struct, encapsulating the entire emulator state (CPU, memory, etc.)
 pub struct Ps1<B: Backend> {
@@ -44,7 +47,7 @@ impl<B: Backend> Ps1<B> {
             cpu: Cpu::new(),
             bus: SystemBus::new(bios, gpu_backend),
             backend: instruction_backend,
-            vblank_timer: 33868,
+            vblank_timer: VBLANK_CYCLES,
         }
     }
 
@@ -56,14 +59,14 @@ impl<B: Backend> Ps1<B> {
             panic!("Invalid PS-EXE file: missing magic header");
         }
 
-        let pc           = u32::from_le_bytes(exe_data[0x10..0x14].try_into().unwrap());
-        let gp           = u32::from_le_bytes(exe_data[0x14..0x18].try_into().unwrap());
-        let load_addr    = u32::from_le_bytes(exe_data[0x18..0x1C].try_into().unwrap());
-        let file_size    = u32::from_le_bytes(exe_data[0x1C..0x20].try_into().unwrap());
+        let pc = u32::from_le_bytes(exe_data[0x10..0x14].try_into().unwrap());
+        let gp = u32::from_le_bytes(exe_data[0x14..0x18].try_into().unwrap());
+        let load_addr = u32::from_le_bytes(exe_data[0x18..0x1C].try_into().unwrap());
+        let file_size = u32::from_le_bytes(exe_data[0x1C..0x20].try_into().unwrap());
         let memfill_addr = u32::from_le_bytes(exe_data[0x28..0x2C].try_into().unwrap());
         let memfill_size = u32::from_le_bytes(exe_data[0x2C..0x30].try_into().unwrap());
-        let sp_base      = u32::from_le_bytes(exe_data[0x30..0x34].try_into().unwrap());
-        let sp_offset    = u32::from_le_bytes(exe_data[0x34..0x38].try_into().unwrap());
+        let sp_base = u32::from_le_bytes(exe_data[0x30..0x34].try_into().unwrap());
+        let sp_offset = u32::from_le_bytes(exe_data[0x34..0x38].try_into().unwrap());
 
         // memfill zeroes a region of RAM before loading
         if memfill_size != 0 {
@@ -90,12 +93,14 @@ impl<B: Backend> Ps1<B> {
     }
 
     fn step(&mut self) {
-        self.bus.tick_dma();
+        self.bus.tick(1);
         self.backend.step(&mut self.cpu, &mut self.bus);
         self.vblank_timer = self.vblank_timer.wrapping_sub(1);
         if self.vblank_timer == 0 {
-            self.vblank_timer = 33868; // Reset timer for next VBlank
-            self.bus.interrupt_controller.raise_interrupt(Interrupt::VBlank);
+            self.vblank_timer = VBLANK_CYCLES; // Reset timer for next VBlank
+            self.bus
+                .interrupt_controller
+                .raise_interrupt(Interrupt::VBlank);
         }
     }
 
@@ -120,5 +125,10 @@ impl<B: Backend> Ps1<B> {
     /// Display the current framebuffer.
     pub fn display(&mut self) {
         self.bus.gpu.display();
+    }
+
+    /// Insert a disc into the CD-ROM drive from the provided .cue file path.
+    pub fn insert_cdrom_disc(&mut self, path: &str) {
+        self.bus.insert_cdrom_disc(path);
     }
 }

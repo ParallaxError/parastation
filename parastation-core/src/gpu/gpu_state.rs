@@ -1,12 +1,12 @@
 /*
  * @file /parastation-core/src/gpu/gpu_state.rs
  * @brief
- * State encapsulation of the GPU as structs, defined at 
+ * State encapsulation of the GPU as structs, defined at
  * https://problemkaputt.de/psx-spx.htm#gpustatusregister.
- * 
+ *
  * The GPU state is encapsulated in the GpuState struct, which holds multiple xState structs
  * for the different GPU registers.
- * 
+ *
  * -----
  */
 
@@ -40,15 +40,15 @@ impl DrawMode {
         24-31 Command  (E1h)
         */
         Self {
-            texture_base_x:             ((command >> 0) & 0xF) as u8,
-            texture_base_y:             ((command >> 4) & 0x1) != 0,
-            semi_transparency:          ((command >> 5) & 0x3) as u8,
-            texture_page_colours:       ((command >> 7) & 0x3) as u8,
-            dither:                     ((command >> 9) & 0x1) != 0,
-            draw_to_display:            ((command >> 10) & 0x1) != 0,
-            texture_disable:            ((command >> 11) & 0x1) != 0,
-            textured_rectangle_flip_x:  ((command >> 12) & 0x1) != 0,
-            textured_rectangle_flip_y:  ((command >> 13) & 0x1) != 0,
+            texture_base_x: ((command >> 0) & 0xF) as u8,
+            texture_base_y: ((command >> 4) & 0x1) != 0,
+            semi_transparency: ((command >> 5) & 0x3) as u8,
+            texture_page_colours: ((command >> 7) & 0x3) as u8,
+            dither: ((command >> 9) & 0x1) != 0,
+            draw_to_display: ((command >> 10) & 0x1) != 0,
+            texture_disable: ((command >> 11) & 0x1) != 0,
+            textured_rectangle_flip_x: ((command >> 12) & 0x1) != 0,
+            textured_rectangle_flip_y: ((command >> 13) & 0x1) != 0,
         }
     }
 }
@@ -73,10 +73,10 @@ impl TextureWindow {
         24-31  Command  (E2h)
         */
         Self {
-            texture_window_mask_x:    ((command >> 0)  & 0x1F) as u8,
-            texture_window_mask_y:    ((command >> 5)  & 0x1F) as u8,
-            texture_window_offset_x:  ((command >> 10) & 0x1F) as u8,
-            texture_window_offset_y:  ((command >> 15) & 0x1F) as u8,
+            texture_window_mask_x: ((command >> 0) & 0x1F) as u8,
+            texture_window_mask_y: ((command >> 5) & 0x1F) as u8,
+            texture_window_offset_x: ((command >> 10) & 0x1F) as u8,
+            texture_window_offset_y: ((command >> 15) & 0x1F) as u8,
         }
     }
 }
@@ -176,21 +176,21 @@ impl Default for DisplayState {
     fn default() -> Self {
         // Reset values per GP1(00h) spec
         Self {
-            display_enable:          false,
-            dma_direction:           0,
-            display_start_x:         0,
-            display_start_y:         0,
-            horizontal_range_x1:     0x200,
-            horizontal_range_x2:     0x200 + 256 * 10,
-            vertical_range_y1:       0x010,
-            vertical_range_y2:       0x010 + 240,
+            display_enable: false,
+            dma_direction: 0,
+            display_start_x: 0,
+            display_start_y: 0,
+            horizontal_range_x1: 0x200,
+            horizontal_range_x2: 0x200 + 256 * 10,
+            vertical_range_y1: 0x010,
+            vertical_range_y2: 0x010 + 240,
             horizontal_resolution_1: 0,
-            vertical_resolution:     false,
-            video_mode:              false,
-            display_colour_depth:    false,
-            vertical_interlace:      false,
+            vertical_resolution: false,
+            video_mode: false,
+            display_colour_depth: false,
+            vertical_interlace: false,
             horizontal_resolution_2: false,
-            reverseflag:             false,
+            reverseflag: false,
             texture_disable_allowed: false,
         }
     }
@@ -199,13 +199,13 @@ impl Default for DisplayState {
 /// GPU state encapsulation struct. Holds all stateful registers on the PS1 GPU.
 #[derive(Debug, Clone, Default)]
 pub struct GpuState {
-    pub irq:             bool,
-    pub draw_mode:       DrawMode,
-    pub texture_window:  TextureWindow,
-    pub drawing_area:    DrawingArea,
-    pub drawing_offset:  DrawingOffset,
-    pub mask:            Mask,
-    pub display_state:   DisplayState,
+    pub irq: bool,
+    pub draw_mode: DrawMode,
+    pub texture_window: TextureWindow,
+    pub drawing_area: DrawingArea,
+    pub drawing_offset: DrawingOffset,
+    pub mask: Mask,
+    pub display_state: DisplayState,
 }
 
 /// Reset GPU state per GP1(00h), preserving texture_disable_allowed per spec

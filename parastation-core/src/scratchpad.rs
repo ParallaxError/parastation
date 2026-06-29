@@ -2,12 +2,12 @@
  * @file /parastation-core/src/scratchpad.rs
  * @brief
  * Data cache used as fast RAM, 1KB mapped at 0x1F80_0000.
- * 
+ *
  * -----
  */
 
-/// Data cache used as fast RAM, 1KB mapped at 0x1F80_0000. Exposes functionality for reads and 
-/// writes to scratchpad memory. The scratchpad is a small, fast memory region used for 
+/// Data cache used as fast RAM, 1KB mapped at 0x1F80_0000. Exposes functionality for reads and
+/// writes to scratchpad memory. The scratchpad is a small, fast memory region used for
 /// temporary storage by the BIOS.
 pub struct Scratchpad {
     data: Box<[u8]>, // 1KB of scratchpad memory

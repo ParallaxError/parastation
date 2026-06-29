@@ -2,47 +2,47 @@
  * @file /parastation-core/src/gpu/gpu_commands.rs
  * @brief
  * Enumerations for the GPU commands and encoding how many parameters they take (for GP0 commands).
- * 
- * The parameters of the GPU commands are not encapsulated in the enum since variable length 
+ *
+ * The parameters of the GPU commands are not encapsulated in the enum since variable length
  * commands need the whole buffer before decoding, but instead just act as an identity for each
  * command.
- * 
+ *
  * -----
  */
 
 /// GP0 commands, identified by the high byte of the first word in the command buffer.
-/// 
+///
 /// https://problemkaputt.de/psx-spx.htm#gpuioportsdmachannelscommandsvram
 #[derive(Debug)]
 pub enum Gp0Command {
-    Nop, // 0x00
-    ClearCache, // 0x01
-    FillRect, // 0x02
+    Nop,         // 0x00
+    ClearCache,  // 0x01
+    FillRect,    // 0x02
     Unknown0x03, // 0x03 (takes up FIFO space)
-    RaiseIrq, // 0x1F
+    RaiseIrq,    // 0x1F
 
-    MonochromeTri, // 0x20, 0x22
-    MonochromeQuad, // 0x28, 0x2A
-    TexturedTri, // 0x24, 0x25, 0x26, 0x27
-    TexturedQuad, // 0x2C, 0x2D, 0x2E, 0x2F
-    ShadedTri, // 0x30, 0x32
-    ShadedQuad, // 0x38, 0x3A
-    ShadedTexturedTri, // 0x34, 0x36
+    MonochromeTri,      // 0x20, 0x22
+    MonochromeQuad,     // 0x28, 0x2A
+    TexturedTri,        // 0x24, 0x25, 0x26, 0x27
+    TexturedQuad,       // 0x2C, 0x2D, 0x2E, 0x2F
+    ShadedTri,          // 0x30, 0x32
+    ShadedQuad,         // 0x38, 0x3A
+    ShadedTexturedTri,  // 0x34, 0x36
     ShadedTexturedQuad, // 0x3C, 0x3E
 
-    MonochromeLine, // 0x40, 0x42
+    MonochromeLine,     // 0x40, 0x42
     MonochromePolyline, // 0x48, 0x4A
-    ShadedLine, // 0x50, 0x52
-    ShadedPolyline, // 0x58, 0x5A
+    ShadedLine,         // 0x50, 0x52
+    ShadedPolyline,     // 0x58, 0x5A
 
     VariableMonochromeRectangle, // 0x60, 0x62
-    MonochromeRectangle, // 0x68, 0x6A, 0x70, 0x72, 0x78, 0x7A
-    VariableTexturedRectangle, // 0x64, 0x65, 0x66, 0x67
-    TexturedRectangle, // 0x6C to 0x7F
-    
-    CopyRect, // 0x80
+    MonochromeRectangle,         // 0x68, 0x6A, 0x70, 0x72, 0x78, 0x7A
+    VariableTexturedRectangle,   // 0x64, 0x65, 0x66, 0x67
+    TexturedRectangle,           // 0x6C to 0x7F
+
+    CopyRect,       // 0x80
     SendRectToVram, // 0xA0
-    CopyRectToCpu, // 0xC0
+    CopyRectToCpu,  // 0xC0
 
     SetRenderingAttribute, // 0xE1 to 0xE6
 
@@ -91,7 +91,10 @@ pub fn decode_gp0_command(word: u32) -> Gp0Command {
 /// Get how many words following the initial command word are parameters for the given GP0 command, based on the command type and
 pub fn gp0_command_parameter_count(command: &Gp0Command) -> usize {
     match command {
-        Gp0Command::Nop | Gp0Command::ClearCache | Gp0Command::Unknown0x03 | Gp0Command::RaiseIrq => 0,
+        Gp0Command::Nop
+        | Gp0Command::ClearCache
+        | Gp0Command::Unknown0x03
+        | Gp0Command::RaiseIrq => 0,
         Gp0Command::FillRect => 2,
 
         Gp0Command::MonochromeTri => 3,

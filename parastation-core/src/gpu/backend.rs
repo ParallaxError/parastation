@@ -5,7 +5,7 @@
  * The trait isn't implemented by the core as it's frontend dependent, but the appropriate
  * frontend must implement the GPU commands defined by
  * https://problemkaputt.de/psx-spx.htm#gpuioportsdmachannelscommandsvram
- * 
+ *
  * -----
  */
 
@@ -33,7 +33,16 @@ pub trait GpuBackend {
     fn clear_cache(&mut self);
 
     /// Copy a rectangular area from VRAM to another area in VRAM
-    fn copy_rect(&mut self, src_x: u16, src_y: u16, dst_x: u16, dst_y: u16, w: u16, h: u16, mask: &Mask);
+    fn copy_rect(
+        &mut self,
+        src_x: u16,
+        src_y: u16,
+        dst_x: u16,
+        dst_y: u16,
+        w: u16,
+        h: u16,
+        mask: &Mask,
+    );
 
     /// Initiate a DMA transfer from VRAM to the CPU, with words being sent through GPUREAD
     fn vram_read_begin(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16);
@@ -45,7 +54,7 @@ pub trait GpuBackend {
     /// Initiate a DMA transfer from the CPU to VRAM, with words being sent through GP0
     fn vram_write_begin(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16, mask: &Mask);
 
-    /// Write a word to the VRAM DMA transfer initiated by vram_write_begin, 
+    /// Write a word to the VRAM DMA transfer initiated by vram_write_begin,
     /// raising an error if done/never initiated
     fn vram_write(&mut self, word: u32);
 

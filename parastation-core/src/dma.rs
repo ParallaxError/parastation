@@ -1,14 +1,17 @@
 /*
  * @file /parastation-core/src/dma.rs
  * @brief
- * Direct Memory Access (DMA) controller for the PS1. Handles DMA transfers between peripherals, 
+ * Direct Memory Access (DMA) controller for the PS1. Handles DMA transfers between peripherals,
  * and has 7 DMA channels for different peripherals (GPU, SPU, CD-ROM, etc.).
- * 
- * The DMA controller produces transfer requests, but the system bus actually performs the transfers, 
+ *
+ * The DMA controller produces transfer requests, but the system bus actually performs the transfers,
  * so the controller just needs to keep track of the settings and create the requests.
- * 
+ *
  * -----
  */
+
+// Imports
+use crate::interrupt_controller::{Interrupt, InterruptController};
 
 /// Possible DMA transfer types that the system bus should execute, decoded by the DMA controller
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -35,8 +38,8 @@ pub enum DmaTransfer {
 
 // DMA channel member structures
 // https://problemkaputt.de/psx-spx.htm#dmachannels
-pub struct DmaBlockControl (
-    pub u32 // 32 bit register, meaning of bits depend on SyncMode
+pub struct DmaBlockControl(
+    pub u32, // 32 bit register, meaning of bits depend on SyncMode
 );
 
 impl DmaBlockControl {
@@ -90,8 +93,8 @@ pub struct DmaChannelControl {
     pub sync_mode: SyncMode,
     pub chopping_dma_window_size: u8, // 0-15, 2^n words
     pub chopping_cpu_window_size: u8, // 0-15, 2^n cycles
-    pub busy: bool, // Whether the channel is currently active
-    pub start_trigger: bool // 0 = normal, 1 = manual start (for sync mode 0)
+    pub busy: bool,                   // Whether the channel is currently active
+    pub start_trigger: bool,          // 0 = normal, 1 = manual start (for sync mode 0)
 }
 
 impl DmaChannelControl {
@@ -133,8 +136,16 @@ impl DmaChannelControl {
 
     pub fn from_word(word: u32) -> Self {
         Self {
-            direction: if (word & 0x1) == 0 { TransferDirection::ToRam } else { TransferDirection::FromRam },
-            memory_step: if (word & 0x2) == 0 { MemoryStep::Forward } else { MemoryStep::Backward },
+            direction: if (word & 0x1) == 0 {
+                TransferDirection::ToRam
+            } else {
+                TransferDirection::FromRam
+            },
+            memory_step: if (word & 0x2) == 0 {
+                MemoryStep::Forward
+            } else {
+                MemoryStep::Backward
+            },
             enable_chopping: (word & 0x100) != 0,
             sync_mode: match (word >> 9) & 0x3 {
                 0 => SyncMode::ImmediateStartTransfer,
@@ -159,7 +170,9 @@ impl DmaChannelControl {
             MemoryStep::Forward => 0,
             MemoryStep::Backward => 2,
         };
-        if self.enable_chopping { word |= 0x100; }
+        if self.enable_chopping {
+            word |= 0x100;
+        }
         word |= match self.sync_mode {
             SyncMode::ImmediateStartTransfer => 0,
             SyncMode::SyncBlocksToRequests => 1 << 9,
@@ -168,8 +181,12 @@ impl DmaChannelControl {
         };
         word |= (self.chopping_dma_window_size as u32) << 16;
         word |= (self.chopping_cpu_window_size as u32) << 20;
-        if self.busy { word |= 0x1000000; }
-        if self.start_trigger { word |= 0x10000000; }
+        if self.busy {
+            word |= 0x1000000;
+        }
+        if self.start_trigger {
+            word |= 0x10000000;
+        }
         word
     }
 }
@@ -192,23 +209,24 @@ impl DmaChannel {
     }
 
     pub fn is_active(&self) -> bool {
-        self.chcr.busy && match self.chcr.sync_mode {
-            SyncMode::ImmediateStartTransfer => self.chcr.start_trigger, // For sync mode 0, the channel is active if start_trigger is set
-            _ => true, // For other sync modes, the channel is active as long as busy
-        }
+        self.chcr.busy
+            && match self.chcr.sync_mode {
+                SyncMode::ImmediateStartTransfer => self.chcr.start_trigger, // For sync mode 0, the channel is active if start_trigger is set
+                _ => true, // For other sync modes, the channel is active as long as busy
+            }
     }
 }
 
 /// DMA controller for the PS1, which handles DMA transfers between peripherals. The PS1 has 7 DMA
 /// channels for different peripherals (GPU, SPU, CD-ROM, etc.).
-/// 
-/// The DMA controller produces transfer requests, but the system bus actually performs the transfers, 
+///
+/// The DMA controller produces transfer requests, but the system bus actually performs the transfers,
 /// so the controller just needs to keep track of the settings and create the requests.
 pub struct DmaController {
     pub channels: [DmaChannel; 7],
     pub priorities: [u8; 7], // Priority of each channel, 0-7 (0 = highest priority)
-    pub enables: [bool; 7], // Whether each channel is enabled
-    pub dicr: u32, // DMA Interrupt Register
+    pub enables: [bool; 7],  // Whether each channel is enabled
+    pub dicr: u32,           // DMA Interrupt Register
 }
 
 impl DmaController {
@@ -251,7 +269,6 @@ impl DmaController {
     */
 
     fn read_dpcr(&self) -> u32 {
-
         let mut value = 0;
         for i in 0..7 {
             value |= (self.priorities[i] as u32 & 0x7) << (i * 4);
@@ -274,7 +291,26 @@ impl DmaController {
     }
 
     fn write_dicr(&mut self, value: u32) {
-        self.dicr = value;
+        // Bits 0-23 are written directly (dummy bits, force_irq, channel_irq_en)
+        let writable_low = value & 0x00FF_FFFF;
+        // Bits 24-30: writing 1 clears the channel's flag (ack)
+        let ack_mask = (value >> 24) & 0x7F;
+        let new_flags = ((self.dicr >> 24) & 0x7F) & !ack_mask;
+
+        self.dicr = writable_low | (new_flags << 24);
+        // bit31 gets recalculated, not directly settable by software
+        self.recalculate_master_irq();
+    }
+
+    fn recalculate_master_irq(&mut self) {
+        let force_irq = (self.dicr >> 15) & 0x1 != 0;
+        let master_enable = (self.dicr >> 23) & 0x1 != 0;
+        let any_flags = (self.dicr >> 24) & 0x7F != 0;
+        if force_irq || (master_enable && any_flags) {
+            self.dicr |= 1 << 31;
+        } else {
+            self.dicr &= !(1 << 31);
+        }
     }
 
     fn read_dma_base_addr(&self, channel: usize) -> u32 {
@@ -317,7 +353,6 @@ impl DmaController {
     1F8010F0h DPCR - DMA Control register
     1F8010F4h DICR - DMA Interrupt register
      */
-
 
     /// Register offsets are relative to the DMA register block base (0x1F80_1080).
     /// In other words: offset 0x00 maps to 0x1F80_1080 (DMA0_MADR).
@@ -364,11 +399,18 @@ impl DmaController {
             }
             0x70 => self.write_dpcr(value),
             0x74 => self.write_dicr(value),
-            _ => eprintln!("Invalid DMA register write at offset {offset:#x} with value {value:#x}"),
+            _ => {
+                eprintln!("Invalid DMA register write at offset {offset:#x} with value {value:#x}")
+            }
         }
     }
 
-    pub fn complete_transfer(&mut self, channel: usize) {
+    pub fn complete_transfer(
+        &mut self,
+        channel: usize,
+        interrupt_controller: &mut InterruptController,
+    ) {
+        let prev_irq_pending = self.irq_pending();
         let ch = &mut self.channels[channel];
 
         // Clear busy and trigger bits
@@ -383,13 +425,18 @@ impl DmaController {
 
         // Recalculate master IRQ flag per spec:
         // IF b15=1 OR (b23=1 AND b(24-30)>0) THEN b31=1 ELSE b31=0
-        let force_irq    = (self.dicr >> 15) & 0x1 != 0;
+        let force_irq = (self.dicr >> 15) & 0x1 != 0;
         let master_enable = (self.dicr >> 23) & 0x1 != 0;
-        let any_flags    = (self.dicr >> 24) & 0x7F != 0;
+        let any_flags = (self.dicr >> 24) & 0x7F != 0;
         if force_irq || (master_enable && any_flags) {
             self.dicr |= 1 << 31;
         } else {
             self.dicr &= !(1 << 31);
+        }
+
+        // Fire the actual CPU-visible DMA interrupt only on the rising edge
+        if !prev_irq_pending && self.irq_pending() {
+            interrupt_controller.raise_interrupt(Interrupt::DMA);
         }
     }
 
@@ -406,66 +453,94 @@ impl DmaController {
 
         match channel {
             // DMA6: Ordering Table Clear, so always return an OtcFill transfer
-            6 => Some(
-                DmaTransfer::OtcFill { base_addr: addr, word_count: ch.bcr.word_count() }
-            ),
+            6 => Some(DmaTransfer::OtcFill {
+                base_addr: addr,
+                word_count: ch.bcr.word_count(),
+            }),
 
             // DMA2: GPU, mode depends on the channel control settings
             2 => match ch.chcr.sync_mode {
-                SyncMode::LinkedListMode => Some(
-                    DmaTransfer::GpuLinkedList { list_addr: addr }
-                ),
+                SyncMode::LinkedListMode => Some(DmaTransfer::GpuLinkedList { list_addr: addr }),
                 SyncMode::SyncBlocksToRequests => {
                     if ch.chcr.direction == TransferDirection::FromRam {
-                        Some(DmaTransfer::GpuVramWrite { src_addr: addr, word_count: ch.bcr.total_words() })
+                        Some(DmaTransfer::GpuVramWrite {
+                            src_addr: addr,
+                            word_count: ch.bcr.total_words(),
+                        })
                     } else {
-                        Some(DmaTransfer::GpuVramRead { dest_addr: addr, word_count: ch.bcr.total_words() })
+                        Some(DmaTransfer::GpuVramRead {
+                            dest_addr: addr,
+                            word_count: ch.bcr.total_words(),
+                        })
                     }
-                },
+                }
                 SyncMode::ImmediateStartTransfer => {
                     eprintln!("DMA2 with SyncMode 0 (immediate), treating as VRAM write...");
-                    Some(
-                        DmaTransfer::GpuVramWrite { src_addr: addr, word_count: ch.bcr.total_words() }
-                    )
-                },
-                _ => { eprintln!("DMA2 unsupported sync mode"); None },
+                    Some(DmaTransfer::GpuVramWrite {
+                        src_addr: addr,
+                        word_count: ch.bcr.total_words(),
+                    })
+                }
+                _ => {
+                    eprintln!("DMA2 unsupported sync mode");
+                    None
+                }
             },
 
             // DMA3: CDROM, always read from CDROM FIFO to RAM
-            3 => Some(
-                DmaTransfer::CdromToRam { dest_addr: addr, word_count: ch.bcr.word_count() }
-            ),
+            3 => Some(DmaTransfer::CdromToRam {
+                dest_addr: addr,
+                word_count: ch.bcr.word_count(),
+            }),
 
             // DMA4: SPU, mode depends on the channel control settings
             4 => match ch.chcr.sync_mode {
                 SyncMode::ImmediateStartTransfer | SyncMode::SyncBlocksToRequests => {
                     if ch.chcr.direction == TransferDirection::FromRam {
-                        Some(DmaTransfer::SpuWrite { src_addr: addr, word_count: ch.bcr.total_words() })
+                        Some(DmaTransfer::SpuWrite {
+                            src_addr: addr,
+                            word_count: ch.bcr.total_words(),
+                        })
                     } else {
-                        Some(DmaTransfer::SpuRead { dest_addr: addr, word_count: ch.bcr.total_words() })
+                        Some(DmaTransfer::SpuRead {
+                            dest_addr: addr,
+                            word_count: ch.bcr.total_words(),
+                        })
                     }
                 }
-                _ => { eprintln!("DMA4 unsupported sync mode"); None }
+                _ => {
+                    eprintln!("DMA4 unsupported sync mode");
+                    None
+                }
             },
 
             // DMA0: MDECin, always RAM to MDEC
-            0 => Some(
-                DmaTransfer::MdecIn { src_addr: addr, word_count: ch.bcr.total_words() }
-            ),
+            0 => Some(DmaTransfer::MdecIn {
+                src_addr: addr,
+                word_count: ch.bcr.total_words(),
+            }),
 
             // DMA1: MDECout, always MDEC to RAM
-            1 => Some(
-                DmaTransfer::MdecOut { dest_addr: addr, word_count: ch.bcr.total_words() }
-            ),
+            1 => Some(DmaTransfer::MdecOut {
+                dest_addr: addr,
+                word_count: ch.bcr.total_words(),
+            }),
 
-            _ => { eprintln!("Unsupported DMA channel {channel}"); None }
+            _ => {
+                eprintln!("Unsupported DMA channel {channel}");
+                None
+            }
         }
     }
 
     pub fn get_pending_transfer(&self) -> Option<(usize, DmaTransfer)> {
         for i in 0..7 {
-            if !self.enables[i] { continue; } // Channel not enabled, skip
-            if !self.channels[i].is_active() { continue; } // Channel not active, skip
+            if !self.enables[i] {
+                continue;
+            } // Channel not enabled, skip
+            if !self.channels[i].is_active() {
+                continue;
+            } // Channel not active, skip
 
             let transfer = self.decode_channel(i)?;
             return Some((i, transfer));

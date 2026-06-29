@@ -3,7 +3,7 @@
  * @brief
  * GPU struct that encapsulates platform-agnostic functionality of the PS1 GPU.
  * This includes the state encapsulation of the GPU and behaviour such as instruction decoding.
- * 
+ *
  * -----
  */
 
@@ -11,8 +11,8 @@
 use std::cell::Cell;
 
 mod gpu_state;
-use gpu_state::{GpuState, DrawMode, TextureWindow, DrawingOffset};
 pub use gpu_state::Mask;
+pub use gpu_state::{DrawMode, DrawingOffset, GpuState, TextureWindow};
 mod rendering_parameters;
 pub use rendering_parameters::*;
 pub mod backend;
@@ -23,19 +23,27 @@ pub use gpu_commands::*;
 // VRAM transfer modes
 enum Gp0Mode {
     Command,
-    VramWrite
+    VramWrite,
+}
+
+// GPUREAD mode
+enum Gp0ReadMode {
+    Vram,         // reading back VRAM via GP0(C0h)/Copy Rectangle
+    GpuInfo(u32), // reading back GP1(10h) info, storing the requested sub-index
 }
 
 struct VramTransfer {
-    x: u16, y: u16,
-    w: u16, h: u16,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
     current_x: u16,
     current_y: u16,
     words_remaining: u32,
 }
 
 /// Encapsulates the state and functionality of the PS1 GPU.
-/// 
+///
 /// Absorbs register reads and writes when interacting with the GPU and owns the GPU backend
 /// that draws to the desired output (e.g. a window or a framebuffer)
 pub struct Gpu {
@@ -51,6 +59,8 @@ pub struct Gpu {
 
     // VRAM transfers
     gp0_mode: Gp0Mode,
+    gp0_read_mode: Option<Gp0ReadMode>,
+    gpuread_last_value: u32,
     vram_transfer: Option<VramTransfer>,
 }
 
@@ -65,6 +75,8 @@ impl Gpu {
             gpustat_bit31: Cell::new(false),
 
             gp0_mode: Gp0Mode::Command,
+            gp0_read_mode: None,
+            gpuread_last_value: 0,
             vram_transfer: None,
         }
     }
@@ -72,17 +84,25 @@ impl Gpu {
 
 // Register reads
 impl Gpu {
-    pub fn read_register(&self, offset: u32) -> u32 {
+    pub fn read_register(&mut self, offset: u32) -> u32 {
         match offset {
-            0x00 => { eprintln!("GPUREAD register unimplemented"); 0 },
+            0x00 => self.read_gpuread(),
             0x04 => self.get_status_register(),
-            _ => panic!("Invalid GPU register read offset: 0x{:02X}", offset)
+            _ => panic!("Invalid GPU register read offset: 0x{:02X}", offset),
+        }
+    }
+
+    fn read_gpuread(&mut self) -> u32 {
+        match &self.gp0_read_mode {
+            Some(Gp0ReadMode::Vram) => self.read_vram(),
+            Some(Gp0ReadMode::GpuInfo(_)) => self.gpuread_last_value,
+            None => self.gpuread_last_value, // Fallback if no command issued
         }
     }
 
     /// Get the 32 bit status register value based on the current state of the GPU.
-    /// 
-    /// https://problemkaputt.de/psx-spx.htm#gpustatusregister contains the bit layout of the 
+    ///
+    /// https://problemkaputt.de/psx-spx.htm#gpustatusregister contains the bit layout of the
     /// status register.
     fn get_status_register(&self) -> u32 {
         let mut status: u32 = 0;
@@ -109,9 +129,11 @@ impl Gpu {
         status |= (self.state.display_state.vertical_interlace as u32) << 13;
         // Bit 14: Reverseflag (display)
         status |= (self.state.display_state.reverseflag as u32) << 14;
-        
+
         // Bit 15: texture disable (draw mode)
-        status |= (((self.state.draw_mode.texture_disable) && (self.state.display_state.texture_disable_allowed)) as u32) << 15;
+        status |= (((self.state.draw_mode.texture_disable)
+            && (self.state.display_state.texture_disable_allowed)) as u32)
+            << 15;
 
         // Bit 16: horizontal resolution 2 (dplsay)
         status |= (self.state.display_state.horizontal_resolution_2 as u32) << 16;
@@ -149,8 +171,7 @@ impl Gpu {
 // GP0 command handling and dispatch
 impl Gpu {
     fn write_gp0(&mut self, word: u32) {
-        match self.gp0_mode
-        {
+        match self.gp0_mode {
             // Just receive a command word for VRAM write mode
             Gp0Mode::VramWrite => {
                 self.gp0_receive_vram_word(word);
@@ -170,7 +191,7 @@ impl Gpu {
                     self.gp0_buffer.push(word);
                     self.gp0_words_remaining = gp0_command_parameter_count(&command) as u32;
                 }
-        
+
                 // If we're done accumulating a command, execute it
                 if self.gp0_words_remaining == 0 {
                     let command = decode_gp0_command(self.gp0_buffer[0]);
@@ -178,13 +199,13 @@ impl Gpu {
                 }
             }
         }
-
     }
-    
+
     fn execute_gp0_command(&mut self, command: Gp0Command) {
         match command {
-            Gp0Command::Nop => {},
+            Gp0Command::Nop => {}
             Gp0Command::ClearCache => self.backend.clear_cache(),
+            Gp0Command::FillRect => self.fill_rect(),
 
             Gp0Command::MonochromeQuad => self.draw_monochrome_quad(),
             Gp0Command::TexturedTri => self.draw_textured_tri(),
@@ -192,9 +213,14 @@ impl Gpu {
             Gp0Command::ShadedTri => self.draw_shaded_tri(),
             Gp0Command::ShadedQuad => self.draw_shaded_quad(),
 
+            Gp0Command::VariableMonochromeRectangle => self.draw_variable_monochrome_rectangle(),
             Gp0Command::MonochromeRectangle => self.draw_monochrome_rectangle(),
+            Gp0Command::VariableTexturedRectangle => self.draw_variable_textured_rectangle(),
+            Gp0Command::TexturedRectangle => self.draw_textured_rectangle(),
 
             Gp0Command::SendRectToVram => self.begin_vram_write(),
+            Gp0Command::CopyRectToCpu => self.begin_vram_read(),
+            Gp0Command::CopyRect => self.copy_rect(),
 
             Gp0Command::SetRenderingAttribute => self.set_rendering_attribute(),
             _ => eprintln!("GP0 command execution not implemented: {:?}", command),
@@ -213,21 +239,50 @@ impl Gpu {
             0xE4 => self.state.drawing_area.set_bottom_right(self.gp0_buffer[0]),
             0xE5 => self.state.drawing_offset = DrawingOffset::from_gp0_command(self.gp0_buffer[0]),
             0xE6 => self.state.mask = Mask::from_gp0_command(self.gp0_buffer[0]),
-            _ => eprintln!("Unknown GP0 rendering attribute command: 0x{:02X}", cmd)
+            _ => eprintln!("Unknown GP0 rendering attribute command: 0x{:02X}", cmd),
         }
     }
 }
 
 // GP0 VRAM commands
 impl Gpu {
+    fn begin_vram_read(&mut self) {
+        /*
+        1st  Command           (Cc000000h) ;\
+        2nd  Source Coord      (YyyyXxxxh) ; write to GP0 port (as usually)
+        3rd  Width+Height      (YsizXsizh) ;/
+        ...  Data              (...)       ;<--- read from GPUREAD port (or via DMA)
+
+        Transfers data from frame buffer to CPU. Wait for bit27 of the status register to be set before reading the
+        image data. When the number of halfwords is odd, an extra halfword is read at the end (packets consist of
+        32bit units).
+        */
+
+        let x = (self.gp0_buffer[1] & 0x3FF) as u16;
+        let y = ((self.gp0_buffer[1] >> 16) & 0x1FF) as u16;
+        let w = (self.gp0_buffer[2] & 0x3FF) as u16;
+        let h = ((self.gp0_buffer[2] >> 16) & 0x1FF) as u16;
+
+        if w == 0 || h == 0 {
+            return;
+        }
+
+        self.backend.vram_read_begin(x, y, w, h);
+    }
+
+    fn read_vram(&mut self) -> u32 {
+        // Read one word from VRAM, or 0 if no more left
+        self.backend.vram_read().unwrap_or(0)
+    }
+
     fn begin_vram_write(&mut self) {
         /*
         1st  Command           (Cc000000h)
         2nd  Destination Coord (YyyyXxxxh)
         3rd  Width+Height      (YsizXsizh)
 
-        Transfers data from CPU to frame buffer. 
-        If the number of halfwords to be sent is odd, an extra halfword should be sent (packets consist of 32bit units). 
+        Transfers data from CPU to frame buffer.
+        If the number of halfwords to be sent is odd, an extra halfword should be sent (packets consist of 32bit units).
         The transfer is affected by Mask setting.
         */
 
@@ -240,10 +295,15 @@ impl Gpu {
         let pixel_count = w as u32 * h as u32;
         let words = (pixel_count + 1) / 2;
 
-        if words == 0 { return; }
+        if words == 0 {
+            return;
+        }
 
         self.vram_transfer = Some(VramTransfer {
-            x, y, w, h,
+            x,
+            y,
+            w,
+            h,
             current_x: x,
             current_y: y,
             words_remaining: words,
@@ -265,6 +325,50 @@ impl Gpu {
                 self.vram_transfer = None;
             }
         }
+    }
+
+    fn fill_rect(&mut self) {
+        /*
+        1st  Color+Command     (CcBbGgRrh)  ;24bit RGB value (see note)
+        2nd  Top Left Corner   (YyyyXxxxh)  ;Xpos counted in halfwords, steps of 10h
+        3rd  Width+Height      (YsizXsizh)  ;Xsiz counted in halfwords, steps of 10h
+        */
+
+        let colour = Colour::from_word(self.gp0_buffer[0]);
+        let pos = Vertex::from_word(self.gp0_buffer[1]);
+        let w = (self.gp0_buffer[2] & 0x3FF) as u16;
+        let h = ((self.gp0_buffer[2] >> 16) & 0x1FF) as u16;
+
+        self.backend.fill_rect(pos, w, h, colour);
+    }
+
+    fn copy_rect(&mut self) {
+        /*
+        GP0(80h) - Copy Rectangle (VRAM to VRAM)
+        1st  Command           (Cc000000h)
+        2nd  Source Coord      (YyyyXxxxh)  ;Xpos counted in halfwords
+        3rd  Destination Coord (YyyyXxxxh)  ;Xpos counted in halfwords
+        4th  Width+Height      (YsizXsizh)  ;Xsiz counted in halfwords
+        Copys data within framebuffer. The transfer is affected by Mask setting.
+        Note: The command reads 128 halfwords from source to a temp buffer, then writes 128 halfwords from temp to
+        dest; if the width isn't a multiple of 128 then the rightmost portion of each scanline will be less than
+        128 halfwords).
+        */
+
+        let src_pos = Vertex::from_word(self.gp0_buffer[1]);
+        let dest_pos = Vertex::from_word(self.gp0_buffer[2]);
+        let w = (self.gp0_buffer[3] & 0x3FF) as u16;
+        let h = ((self.gp0_buffer[3] >> 16) & 0x1FF) as u16;
+
+        self.backend.copy_rect(
+            src_pos.x as u16,
+            src_pos.y as u16,
+            dest_pos.x as u16,
+            dest_pos.y as u16,
+            w,
+            h,
+            &self.state.mask,
+        );
     }
 }
 
@@ -308,6 +412,7 @@ impl Gpu {
             mask: self.state.mask.clone(),
             draw_mode: self.state.draw_mode.clone(),
             semi_transparency: self.state.draw_mode.semi_transparency,
+            texture_window: self.state.texture_window.clone(),
         }
     }
     /*
@@ -321,7 +426,6 @@ impl Gpu {
     */
 
     fn draw_monochrome_quad(&mut self) {
-
         let cmd = (self.gp0_buffer[0] >> 24) as u8;
         let colour = Colour::from_word(self.gp0_buffer[0]);
         let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
@@ -354,7 +458,7 @@ impl Gpu {
     GP0(25h) - Textured three-point polygon, opaque, raw-texture
     GP0(26h) - Textured three-point polygon, semi-transparent, texture-blending
     GP0(27h) - Textured three-point polygon, semi-transparent, raw-texture
-    
+
     1st  Color+Command     (CcBbGgRrh) (color is ignored for raw-textures)
     2nd  Vertex1           (YyyyXxxxh)
     3rd  Texcoord1+Palette (ClutYyXxh)
@@ -388,9 +492,18 @@ impl Gpu {
         let tri = Polygon::Textured {
             colour: colour,
             vertices: PolygonVertices::Tri(
-                TexturedVertex { vertex: vertex1, texcoord: texcoord1 },
-                TexturedVertex { vertex: vertex2, texcoord: texcoord2 },
-                TexturedVertex { vertex: vertex3, texcoord: texcoord3 },
+                TexturedVertex {
+                    vertex: vertex1,
+                    texcoord: texcoord1,
+                },
+                TexturedVertex {
+                    vertex: vertex2,
+                    texcoord: texcoord2,
+                },
+                TexturedVertex {
+                    vertex: vertex3,
+                    texcoord: texcoord3,
+                },
             ),
             semi_transparent: semi_transparent,
             texture_params: TextureParams {
@@ -443,15 +556,25 @@ impl Gpu {
             _ => unreachable!(),
         };
 
-        println!("cmd: 0x{:08X}", cmd);
-
         let quad = Polygon::Textured {
             colour: colour,
             vertices: PolygonVertices::Quad(
-                TexturedVertex { vertex: vertex1, texcoord: texcoord1 },
-                TexturedVertex { vertex: vertex2, texcoord: texcoord2 },
-                TexturedVertex { vertex: vertex3, texcoord: texcoord3 },
-                TexturedVertex { vertex: vertex4, texcoord: texcoord4 },
+                TexturedVertex {
+                    vertex: vertex1,
+                    texcoord: texcoord1,
+                },
+                TexturedVertex {
+                    vertex: vertex2,
+                    texcoord: texcoord2,
+                },
+                TexturedVertex {
+                    vertex: vertex3,
+                    texcoord: texcoord3,
+                },
+                TexturedVertex {
+                    vertex: vertex4,
+                    texcoord: texcoord4,
+                },
             ),
             semi_transparent: semi_transparent,
             texture_params: TextureParams {
@@ -476,7 +599,6 @@ impl Gpu {
      */
 
     fn draw_shaded_tri(&mut self) {
-
         let cmd = (self.gp0_buffer[0] >> 24) as u8;
         let colour1 = Colour::from_word(self.gp0_buffer[0]);
         let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
@@ -493,9 +615,18 @@ impl Gpu {
 
         let tri = Polygon::Shaded {
             vertices: PolygonVertices::Tri(
-                ShadedVertex { vertex: vertex1, colour: colour1 },
-                ShadedVertex { vertex: vertex2, colour: colour2 },
-                ShadedVertex { vertex: vertex3, colour: colour3 },
+                ShadedVertex {
+                    vertex: vertex1,
+                    colour: colour1,
+                },
+                ShadedVertex {
+                    vertex: vertex2,
+                    colour: colour2,
+                },
+                ShadedVertex {
+                    vertex: vertex3,
+                    colour: colour3,
+                },
             ),
             semi_transparent: semi_transparent,
         };
@@ -522,10 +653,22 @@ impl Gpu {
 
         let quad = Polygon::Shaded {
             vertices: PolygonVertices::Quad(
-                ShadedVertex { vertex: vertex1, colour: colour1 },
-                ShadedVertex { vertex: vertex2, colour: colour2 },
-                ShadedVertex { vertex: vertex3, colour: colour3 },
-                ShadedVertex { vertex: vertex4, colour: colour4 },
+                ShadedVertex {
+                    vertex: vertex1,
+                    colour: colour1,
+                },
+                ShadedVertex {
+                    vertex: vertex2,
+                    colour: colour2,
+                },
+                ShadedVertex {
+                    vertex: vertex3,
+                    colour: colour3,
+                },
+                ShadedVertex {
+                    vertex: vertex4,
+                    colour: colour4,
+                },
             ),
             semi_transparent: semi_transparent,
         };
@@ -533,18 +676,54 @@ impl Gpu {
         self.backend.draw_polygon(&quad, &self.get_draw_params());
     }
 
-    /*
-    GP0(68h) - Monochrome Rectangle (1x1) (Dot) (opaque)
-    GP0(6Ah) - Monochrome Rectangle (1x1) (Dot) (semi-transparent)
-    GP0(70h) - Monochrome Rectangle (8x8) (opaque)
-    GP0(72h) - Monochrome Rectangle (8x8) (semi-transparent)
-    GP0(78h) - Monochrome Rectangle (16x16) (opaque)
-    GP0(7Ah) - Monochrome Rectangle (16x16) (semi-transparent)
-    1st  Color+Command     (CcBbGgRrh)
-    2nd  Vertex            (YyyyXxxxh) 
-     */
+    fn draw_variable_monochrome_rectangle(&mut self) {
+        /*
+        GP0(60h) - Monochrome Rectangle (variable size) (opaque)
+        GP0(62h) - Monochrome Rectangle (variable size) (semi-transparent)
+        1st  Color+Command     (CcBbGgRrh)
+        2nd  Vertex            (YyyyXxxxh)
+        (3rd) Width+Height      (YsizXsizh) (variable size only) (max 1023x511)
+        */
+
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour = Colour::from_word(self.gp0_buffer[0]);
+        let vertex = Vertex::from_word(self.gp0_buffer[1]);
+
+        let semi_transparent = match cmd {
+            0x60 => false,
+            0x62 => true,
+            _ => unreachable!(),
+        };
+
+        let size = if self.gp0_buffer.len() > 2 {
+            let w = (self.gp0_buffer[2] & 0x3FF) as u16;
+            let h = ((self.gp0_buffer[2] >> 16) & 0x1FF) as u16;
+            RectSize::Variable { w: w, h: h }
+        } else {
+            RectSize::Fixed1x1 // Default just in case
+        };
+
+        let rect = Rect::Monochrome {
+            colour,
+            pos: vertex,
+            size: size,
+            semi_transparent: semi_transparent,
+        };
+
+        self.backend.draw_rect(&rect, &self.get_draw_params());
+    }
 
     fn draw_monochrome_rectangle(&mut self) {
+        /*
+        GP0(68h) - Monochrome Rectangle (1x1) (Dot) (opaque)
+        GP0(6Ah) - Monochrome Rectangle (1x1) (Dot) (semi-transparent)
+        GP0(70h) - Monochrome Rectangle (8x8) (opaque)
+        GP0(72h) - Monochrome Rectangle (8x8) (semi-transparent)
+        GP0(78h) - Monochrome Rectangle (16x16) (opaque)
+        GP0(7Ah) - Monochrome Rectangle (16x16) (semi-transparent)
+        1st  Color+Command     (CcBbGgRrh)
+        2nd  Vertex            (YyyyXxxxh)
+        */
 
         let cmd = (self.gp0_buffer[0] >> 24) as u8;
         let colour = Colour::from_word(self.gp0_buffer[0]);
@@ -572,6 +751,113 @@ impl Gpu {
 
         self.backend.draw_rect(&rect, &self.get_draw_params());
     }
+
+    fn draw_variable_textured_rectangle(&mut self) {
+        /*
+        GP0(64h) - Textured Rectangle, variable size, opaque, texture-blending
+        GP0(65h) - Textured Rectangle, variable size, opaque, raw-texture
+        GP0(66h) - Textured Rectangle, variable size, semi-transp, texture-blending
+        GP0(67h) - Textured Rectangle, variable size, semi-transp, raw-texture
+        1st  Color+Command     (CcBbGgRrh) (color is ignored for raw-textures)
+        2nd  Vertex            (YyyyXxxxh) (upper-left edge of the rectangle)
+        3rd  Texcoord+Palette  (ClutYyXxh) (see bug on odd/even Texcoord.X values)
+        (4th) Width+Height      (YsizXsizh) (variable size only) (max 1023x511)
+        */
+
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour = Colour::from_word(self.gp0_buffer[0]);
+        let vertex = Vertex::from_word(self.gp0_buffer[1]);
+        let texcoord = Texcoord::from_word(self.gp0_buffer[2]);
+
+        let semi_transparent = match cmd {
+            0x64 | 0x65 => false,
+            0x66 | 0x67 => true,
+            _ => unreachable!(),
+        };
+
+        let raw_texture = match cmd {
+            0x64 | 0x66 => false,
+            0x65 | 0x67 => true,
+            _ => unreachable!(),
+        };
+
+        let size = if self.gp0_buffer.len() > 3 {
+            let w = (self.gp0_buffer[3] & 0x3FF) as u16;
+            let h = ((self.gp0_buffer[3] >> 16) & 0x1FF) as u16;
+            RectSize::Variable { w: w, h: h }
+        } else {
+            RectSize::Fixed1x1 // Default just in case
+        };
+
+        let rect = Rect::Textured {
+            colour,
+            pos: vertex,
+            size: size,
+            texcoord,
+            semi_transparent: semi_transparent,
+            clut: Clut::from_word(self.gp0_buffer[2]),
+            raw: raw_texture,
+        };
+
+        self.backend.draw_rect(&rect, &self.get_draw_params());
+    }
+
+    fn draw_textured_rectangle(&mut self) {
+        /*
+        GP0(6Ch) - Textured Rectangle, 1x1 (nonsense), opaque, texture-blending
+        GP0(6Dh) - Textured Rectangle, 1x1 (nonsense), opaque, raw-texture
+        GP0(6Eh) - Textured Rectangle, 1x1 (nonsense), semi-transp, texture-blending
+        GP0(6Fh) - Textured Rectangle, 1x1 (nonsense), semi-transp, raw-texture
+        GP0(74h) - Textured Rectangle, 8x8, opaque, texture-blending
+        GP0(75h) - Textured Rectangle, 8x8, opaque, raw-texture
+        GP0(76h) - Textured Rectangle, 8x8, semi-transparent, texture-blending
+        GP0(77h) - Textured Rectangle, 8x8, semi-transparent, raw-texture
+        GP0(7Ch) - Textured Rectangle, 16x16, opaque, texture-blending
+        GP0(7Dh) - Textured Rectangle, 16x16, opaque, raw-texture
+        GP0(7Eh) - Textured Rectangle, 16x16, semi-transparent, texture-blending
+        GP0(7Fh) - Textured Rectangle, 16x16, semi-transparent, raw-texture
+        1st  Color+Command     (CcBbGgRrh) (color is ignored for raw-textures)
+        2nd  Vertex            (YyyyXxxxh) (upper-left edge of the rectangle)
+        3rd  Texcoord+Palette  (ClutYyXxh) (see bug on odd/even Texcoord.X values)
+        (4th) Width+Height      (YsizXsizh) (variable size only) (max 1023x511)
+        */
+
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour = Colour::from_word(self.gp0_buffer[0]);
+        let vertex = Vertex::from_word(self.gp0_buffer[1]);
+        let texcoord = Texcoord::from_word(self.gp0_buffer[2]);
+
+        let semi_transparent = match cmd {
+            0x6C | 0x6D | 0x74 | 0x75 | 0x7C | 0x7D => false,
+            0x6E | 0x6F | 0x76 | 0x77 | 0x7E | 0x7F => true,
+            _ => unreachable!(),
+        };
+
+        let raw_texture = match cmd {
+            0x6C | 0x6E | 0x74 | 0x76 | 0x7C | 0x7E => false,
+            0x6D | 0x6F | 0x75 | 0x77 | 0x7D | 0x7F => true,
+            _ => unreachable!(),
+        };
+
+        let size = match cmd {
+            0x6C | 0x6D | 0x6E | 0x6F => RectSize::Fixed1x1,
+            0x74 | 0x75 | 0x76 | 0x77 => RectSize::Fixed8x8,
+            0x7C | 0x7D | 0x7E | 0x7F => RectSize::Fixed16x16,
+            _ => unreachable!(),
+        };
+
+        let rect = Rect::Textured {
+            colour,
+            pos: vertex,
+            size: size,
+            texcoord,
+            semi_transparent: semi_transparent,
+            clut: Clut::from_word(self.gp0_buffer[2]),
+            raw: raw_texture,
+        };
+
+        self.backend.draw_rect(&rect, &self.get_draw_params());
+    }
 }
 
 // Register writes
@@ -580,7 +866,7 @@ impl Gpu {
         match offset {
             0x00 => self.write_gp0(value),
             0x04 => self.write_gp1(value),
-            _ => panic!("Invalid GPU register write offset: 0x{:02X}", offset)
+            _ => panic!("Invalid GPU register write offset: 0x{:02X}", offset),
         }
     }
 
@@ -590,13 +876,16 @@ impl Gpu {
             // Reset GPU
             0x00 => self.state.reset(),
             // Reset command buffer
-            0x01 => { self.gp0_buffer.clear(); self.gp0_words_remaining = 0 },
+            0x01 => {
+                self.gp0_buffer.clear();
+                self.gp0_words_remaining = 0
+            }
             // Display enable
             0x03 => self.state.display_state.display_enable = (word & 0x1) != 0,
             // Set DMA direction
             0x04 => self.state.display_state.dma_direction = (word & 0x3) as u8,
-            // Set VRAM start 
-            /* 
+            // Set VRAM start
+            /*
             0-9   X (0-1023)    (halfword address in VRAM)  (relative to begin of VRAM)
             10-18 Y (0-511)     (scanline number in VRAM)   (relative to begin of VRAM)
             19-23 Not used (zero)
@@ -606,7 +895,7 @@ impl Gpu {
                 let vram_y = ((word >> 10) & 0x1FF) as u16;
                 self.state.display_state.display_start_x = vram_x;
                 self.state.display_state.display_start_y = vram_y;
-            },
+            }
             // Horizontal display range
             /*
             0-11   X1 (260h+0)       ;12bit       ;\counted in 53.222400MHz units,
@@ -617,7 +906,7 @@ impl Gpu {
                 let x2 = ((word >> 12) & 0xFFF) as u16;
                 self.state.display_state.horizontal_range_x1 = x1;
                 self.state.display_state.horizontal_range_x2 = x2;
-            },
+            }
             // Vertical display range
             /*
             0-9   Y1 (NTSC=88h-(224/2), (PAL=A3h-(264/2))  ;\scanline numbers on screen,
@@ -629,7 +918,7 @@ impl Gpu {
                 let y2 = ((word >> 10) & 0x3FF) as u16;
                 self.state.display_state.vertical_range_y1 = y1;
                 self.state.display_state.vertical_range_y2 = y2;
-            },
+            }
             // Display mode
             /*
             0-1   Horizontal Resolution 1     (0=256, 1=320, 2=512, 3=640) ;GPUSTAT.17-18
@@ -642,13 +931,13 @@ impl Gpu {
             8-23  Not used (zero)
              */
             0x08 => {
-                let horizontal_resolution_1 = (word & 0x3) as u8;         // bits 0-1
-                let vertical_resolution     = ((word >> 2) & 0x1) != 0;   // bit 2
-                let video_mode              = ((word >> 3) & 0x1) != 0;   // bit 3
-                let display_colour_depth    = ((word >> 4) & 0x1) != 0;   // bit 4
-                let vertical_interlace      = ((word >> 5) & 0x1) != 0;   // bit 5
-                let horizontal_resolution_2 = ((word >> 6) & 0x1) != 0;   // bit 6
-                let reverseflag             = ((word >> 7) & 0x1) != 0;   // bit 7
+                let horizontal_resolution_1 = (word & 0x3) as u8; // bits 0-1
+                let vertical_resolution = ((word >> 2) & 0x1) != 0; // bit 2
+                let video_mode = ((word >> 3) & 0x1) != 0; // bit 3
+                let display_colour_depth = ((word >> 4) & 0x1) != 0; // bit 4
+                let vertical_interlace = ((word >> 5) & 0x1) != 0; // bit 5
+                let horizontal_resolution_2 = ((word >> 6) & 0x1) != 0; // bit 6
+                let reverseflag = ((word >> 7) & 0x1) != 0; // bit 7
 
                 self.state.display_state.horizontal_resolution_1 = horizontal_resolution_1;
                 self.state.display_state.vertical_resolution = vertical_resolution;
@@ -658,7 +947,70 @@ impl Gpu {
                 self.state.display_state.horizontal_resolution_2 = horizontal_resolution_2;
                 self.state.display_state.reverseflag = reverseflag;
             }
-            _ => eprintln!("GP1 command not implemented: 0x{:02X}", command_id)
+
+            0x10..=0x1F => self.gp1_get_gpu_info(word & 0xFF),
+            _ => eprintln!("GP1 command not implemented: 0x{:02X}", command_id),
         }
+    }
+
+    fn gp1_get_gpu_info(&mut self, sub_index: u32) {
+        /*
+        GP1(10h) - Get GPU Info
+        GP1(11h..1Fh) - Mirrors of GP1(10h), Get GPU Info
+        After sending the command, the result can be immediately read from GPUREAD register (there's no NOP or other
+        delay required) (namely GPUSTAT.Bit27 is used only for VRAM-Reads, but NOT for GPU-Info-Reads, so do not try
+        to wait for that flag).
+        0-23  Select Information which is to be retrieved (via following GPUREAD)
+        On Old 180pin GPUs, following values can be selected:
+        00h-01h = Returns Nothing (old value in GPUREAD remains unchanged)
+        02h     = Read Texture Window setting  ;GP0(E2h) ;20bit/MSBs=Nothing
+        03h     = Read Draw area top left      ;GP0(E3h) ;19bit/MSBs=Nothing
+        04h     = Read Draw area bottom right  ;GP0(E4h) ;19bit/MSBs=Nothing
+        05h     = Read Draw offset             ;GP0(E5h) ;22bit
+        06h-07h = Returns Nothing (old value in GPUREAD remains unchanged)
+        08h-FFFFFFh = Mirrors of 00h..07h
+        On New 208pin GPUs, following values can be selected:
+        00h-01h = Returns Nothing (old value in GPUREAD remains unchanged)
+        02h     = Read Texture Window setting  ;GP0(E2h) ;20bit/MSBs=Nothing
+        03h     = Read Draw area top left      ;GP0(E3h) ;20bit/MSBs=Nothing
+        04h     = Read Draw area bottom right  ;GP0(E4h) ;20bit/MSBs=Nothing
+        05h     = Read Draw offset             ;GP0(E5h) ;22bit
+        06h     = Returns Nothing (old value in GPUREAD remains unchanged)
+        07h     = Read GPU Type (usually 2)    ;see "GPU Versions" chapter
+        08h     = Unknown (Returns 00000000h) (lightgun on some GPUs?)
+        09h-0Fh = Returns Nothing (old value in GPUREAD remains unchanged)
+        10h-FFFFFFh = Mirrors of 00h..0Fh
+        The selected data is latched in GPUREAD, the same/latched value can be read multiple times, but, the latch
+        isn't automatically updated when changing GP0 registers.
+        */
+
+        let value = match sub_index & 0xF {
+            0x2 => {
+                // Texture window setting, packed back into GP0(E2h) format
+                let tw = &self.state.texture_window;
+                (tw.texture_window_mask_x as u32)
+                    | (tw.texture_window_mask_y as u32) << 5
+                    | (tw.texture_window_offset_x as u32) << 10
+                    | (tw.texture_window_offset_y as u32) << 15
+            }
+            0x3 => {
+                let da = &self.state.drawing_area;
+                (da.x1 as u32) | (da.y1 as u32) << 10
+            }
+            0x4 => {
+                let da = &self.state.drawing_area;
+                (da.x2 as u32) | (da.y2 as u32) << 10
+            }
+            0x5 => {
+                let off = &self.state.drawing_offset;
+                (off.x as u32 & 0x7FF) | ((off.y as u32 & 0x7FF) << 11)
+            }
+            0x7 => 2, // GPU type 2
+            0x8 => 0, // unknown/unused, usually 0
+            _ => 0,
+        };
+
+        self.gp0_read_mode = Some(Gp0ReadMode::GpuInfo(sub_index));
+        self.gpuread_last_value = value;
     }
 }

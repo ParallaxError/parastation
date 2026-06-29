@@ -1,9 +1,9 @@
-mod dummy_gpu_backend; 
+mod dummy_gpu_backend;
 mod opengl_backend;
 use opengl_backend::OpenGlBackend;
 
-use parastation_core::{Interpreter, Ps1};
 use parastation_core::bios::Bios;
+use parastation_core::{Interpreter, Ps1};
 use std::env;
 
 use glutin::config::ConfigTemplateBuilder;
@@ -19,6 +19,9 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 
 fn main() {
+    unsafe {
+        env::set_var("RUST_BACKTRACE", "1");
+    }
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: ps1-frontend <bios.bin>");
@@ -43,7 +46,11 @@ fn main() {
         .build(&event_loop, template, |configs| {
             configs
                 .reduce(|a, b| {
-                    if a.num_samples() > b.num_samples() { a } else { b }
+                    if a.num_samples() > b.num_samples() {
+                        a
+                    } else {
+                        b
+                    }
                 })
                 .unwrap()
         })
@@ -55,16 +62,19 @@ fn main() {
     let context_attrs = ContextAttributesBuilder::new().build(Some(raw_window_handle));
 
     let display = gl_config.display();
-    let context = unsafe {
-        display.create_context(&gl_config, &context_attrs).unwrap()
-    };
+    let context = unsafe { display.create_context(&gl_config, &context_attrs).unwrap() };
 
     let size = window.inner_size();
-    let surface_attrs = SurfaceAttributesBuilder::<WindowSurface>::new()
-        .build(raw_window_handle, size.width.try_into().unwrap(), size.height.try_into().unwrap());
+    let surface_attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
+        raw_window_handle,
+        size.width.try_into().unwrap(),
+        size.height.try_into().unwrap(),
+    );
 
     let gl_surface = unsafe {
-        display.create_window_surface(&gl_config, &surface_attrs).unwrap()
+        display
+            .create_window_surface(&gl_config, &surface_attrs)
+            .unwrap()
     };
 
     let gl_context = context.make_current(&gl_surface).unwrap();
@@ -80,18 +90,21 @@ fn main() {
     let backend = Box::new(OpenGlBackend::new(gl));
     let mut ps1 = Ps1::new(bios, Interpreter::new(), backend);
 
+    // Insert disk
+    ps1.insert_cdrom_disc("games\\Mortal Kombat II (Japan)\\Mortal Kombat II (Japan).cue");
+    // ps1.insert_cdrom_disc("tests\\nolibgs_hello_worlds\\hello_cd\\hello_cd.cue");
+
     // Run some bios
     ps1.run_until_pc(0x80030000);
-    
+
     // Load test exe
-    let exe_data = std::fs::read("tests/psxtest_cpu.exe").unwrap_or_else(|e| {
-        eprintln!("Failed to load psxtest_cpu.exe: {e}");
-        std::process::exit(1);
-    });
+    // let exe_data = std::fs::read("tests/nolibgs_hello_worlds/hello_cd/hello_cd.ps-exe").unwrap_or_else(|e| {
+    //     eprintln!("Failed to load psxtest_cpu.exe: {e}");
+    //     std::process::exit(1);
+    // });
     // ps1.load_exe(&exe_data);
 
-    // Run tesI
-    println!("Starting amidog test!");
+    // Run PS1
     event_loop
         .run(move |event, elwt| {
             elwt.set_control_flow(ControlFlow::Poll);

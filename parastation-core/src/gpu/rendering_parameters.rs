@@ -3,7 +3,7 @@
  * @brief
  * Details the extra parameters passed to drawing methods on the GPU backend, encoded in
  * GPU instructions. These include colours, texture references, geometry data, etc
- * 
+ *
  * -----
  */
 
@@ -33,9 +33,7 @@ impl Colour {
 
     /// Convert 8-bit per channel to 15-bit BGR555 for VRAM
     pub fn to_u16(self) -> u16 {
-        ((self.r as u16 >> 3))
-        | ((self.g as u16 >> 3) << 5)
-        | ((self.b as u16 >> 3) << 10)
+        (self.r as u16 >> 3) | ((self.g as u16 >> 3) << 5) | ((self.b as u16 >> 3) << 10)
     }
 }
 
@@ -46,11 +44,15 @@ pub struct Vertex {
     pub y: i16,
 }
 
+fn sign_extend_11bit(value: u16) -> i16 {
+    ((value << 5) as i16) >> 5
+}
+
 impl Vertex {
     pub fn from_word(word: u32) -> Self {
         Self {
-            x: (word & 0x3FF) as i16,
-            y: ((word >> 16) & 0x3FF) as i16,
+            x: sign_extend_11bit(word as u16),
+            y: sign_extend_11bit((word >> 16) as u16),
         }
     }
 }
@@ -104,7 +106,7 @@ impl Clut {
     pub fn from_word(word: u32) -> Self {
         let upper = word >> 16;
         Self {
-            x: ((upper & 0x3F) as u8),        // bits 16-21, in 16-pixel units
+            x: ((upper & 0x3F) as u8),          // bits 16-21, in 16-pixel units
             y: (((upper >> 6) & 0x1FF) as u16), // bits 22-30
         }
     }
@@ -147,14 +149,14 @@ pub enum PolygonVertices<V> {
     Quad(V, V, V, V),
 }
 
-impl <V: Copy> PolygonVertices<V> {
+impl<V: Copy> PolygonVertices<V> {
     /// Calls the provided function for each triangle in the polygon, breaking quads into two tris
     pub fn triangles(&self, mut f: impl FnMut(V, V, V)) {
         match self {
             PolygonVertices::Tri(v0, v1, v2) => f(*v0, *v1, *v2),
             PolygonVertices::Quad(v0, v1, v2, v3) => {
                 f(*v0, *v1, *v2);
-                f(*v1, *v3, *v2);
+                f(*v1, *v2, *v3);
             }
         }
     }
@@ -168,7 +170,7 @@ pub struct TextureParams {
     pub raw_texture: bool,
 }
 
-/// A polygon that can be drawn by the GPU, with all the necessary parameters for rendering, 
+/// A polygon that can be drawn by the GPU, with all the necessary parameters for rendering,
 /// including vertices and texture information
 #[derive(Debug)]
 pub enum Polygon {
@@ -226,7 +228,7 @@ pub enum Line {
     },
 }
 
-/// Represents the size of a rectangle to be drawn, either variable or fixed sizes of 1x1, 8x8, or 
+/// Represents the size of a rectangle to be drawn, either variable or fixed sizes of 1x1, 8x8, or
 /// 16x16
 #[derive(Debug)]
 pub enum RectSize {
@@ -236,14 +238,14 @@ pub enum RectSize {
     Fixed16x16,
 }
 
-/// A rectangle that can be drawn by the GPU, with all the necessary parameters for rendering, 
+/// A rectangle that can be drawn by the GPU, with all the necessary parameters for rendering,
 /// including position, size, colour, and texture information
 #[derive(Debug)]
 pub enum Rect {
     Monochrome {
-        colour:            Colour,
-        pos:              Vertex,
-        size:             RectSize,
+        colour: Colour,
+        pos: Vertex,
+        size: RectSize,
         semi_transparent: bool,
     },
 
@@ -266,4 +268,5 @@ pub struct DrawParams {
     pub mask: Mask,
     pub draw_mode: DrawMode,
     pub semi_transparency: u8,
+    pub texture_window: TextureWindow,
 }

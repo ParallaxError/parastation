@@ -3,10 +3,10 @@
  * @brief
  * Trait to define a MIPS execution backend. An interpreter is the simplest implementation,
  * then later a JIT can be implemented.
- * 
+ *
  * A backend gets a mutable reference to the CPU and system bus, and can then start executing
  * the program in memory.
- * 
+ *
  * -----
  */
 
