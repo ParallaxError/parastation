@@ -40,10 +40,7 @@ pub struct OpenGlBackend {
     gl: Context,
     // 1024 * 512 R16UI texture on the GPU
     vram_texture: Texture,
-    // Texture from the framebuffer to present, blitted at each present call
-    vram_texture_fbo: Texture,
     vram_framebuffer: Framebuffer,
-
     // Shader programs
     flat_program: Program,
     textured_program: Program,
@@ -52,8 +49,8 @@ pub struct OpenGlBackend {
     // Vertex buffer for batching draw calls
     vertex_buffer: Buffer,
     vertex_array: VertexArray,
-    textured_vertex_array: VertexArray,
     textured_vertex_buffer: Buffer,
+    textured_vertex_array: VertexArray,
     present_vao: VertexArray,
 
     // Display dimensions for letterboxing calculations
@@ -130,7 +127,7 @@ impl OpenGlBackend {
 
     pub fn new(gl: Context) -> Self {
         unsafe {
-            // Create 1024x512 RGBA texture for VRAM
+            // Create 1024x512 R16UI texture for VRAM
             let vram_texture = gl.create_texture().unwrap();
             gl.bind_texture(glow::TEXTURE_2D, Some(vram_texture));
             gl.tex_image_2d(
@@ -144,36 +141,6 @@ impl OpenGlBackend {
                 glow::UNSIGNED_SHORT,
                 None,
             );
-
-            // Some filtering to make it look better when scaled up, but still pixelated
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_S,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_T,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_BASE_LEVEL, 0);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, 0);
-
-            // Create framebuffer for rendering to VRAM texture
-            let vram_texture_fbo = gl.create_texture().unwrap();
-            gl.bind_texture(glow::TEXTURE_2D, Some(vram_texture_fbo));
-            gl.tex_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                glow::RGBA as i32,
-                1024,
-                512,
-                0,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                None,
-            );
-
             gl.tex_parameter_i32(
                 glow::TEXTURE_2D,
                 glow::TEXTURE_MIN_FILTER,
@@ -184,14 +151,19 @@ impl OpenGlBackend {
                 glow::TEXTURE_MAG_FILTER,
                 glow::NEAREST as i32,
             );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::REPEAT as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_BASE_LEVEL, 0);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, 0);
 
+            // Then the framebuffer, will directly present the R16UI texture to the screen
             let vram_framebuffer = gl.create_framebuffer().unwrap();
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(vram_framebuffer));
             gl.framebuffer_texture_2d(
                 glow::FRAMEBUFFER,
                 glow::COLOR_ATTACHMENT0,
                 glow::TEXTURE_2D,
-                Some(vram_texture_fbo),
+                Some(vram_texture),
                 0,
             );
 
@@ -199,6 +171,7 @@ impl OpenGlBackend {
             if status != glow::FRAMEBUFFER_COMPLETE {
                 panic!("FBO incomplete: {status:#x}");
             }
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 
             // Compile our shaders
             // Read source first
@@ -258,7 +231,6 @@ impl OpenGlBackend {
             Self {
                 gl,
                 vram_texture,
-                vram_texture_fbo,
                 vram_framebuffer,
                 flat_program,
                 textured_program,
@@ -792,80 +764,28 @@ impl GpuBackend for OpenGlBackend {
         mask: &Mask,
     ) {
         unsafe {
-            // Read from vram_texture_fbo (more up to date)
-            let mut full_rgba = vec![0u8; 1024 * 512 * 4];
-            self.gl
-                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture_fbo));
-            self.gl.get_tex_image(
+            // GPU-side texture-to-texture copy, but wont handle mask
+            // TODO need to do a shader with blit for copying with mask
+            self.gl.copy_image_sub_data(
+                self.vram_texture,
                 glow::TEXTURE_2D,
                 0,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(&mut full_rgba),
-            );
-
-            // Decode RGBA8 to BGR555 (R16UI) for the region to copy
-            let mut region = vec![0u16; w as usize * h as usize];
-            for row in 0..h as usize {
-                for col in 0..w as usize {
-                    let sx = (src_x as usize + col) % 1024;
-                    let sy = (src_y as usize + row) % 512;
-                    let idx = (sy * 1024 + sx) * 4;
-                    let r = (full_rgba[idx] >> 3) as u16;
-                    let g = (full_rgba[idx + 1] >> 3) as u16;
-                    let b = (full_rgba[idx + 2] >> 3) as u16;
-                    region[row * w as usize + col] = r | (g << 5) | (b << 10);
-                }
-            }
-
-            // TODO: check_mask_before_draw
-
-            if mask.set_mask_while_drawing {
-                for p in region.iter_mut() {
-                    *p |= 0x8000;
-                }
-            }
-
-            // Write to vram_texture (R16UI)
-            self.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-            self.gl
-                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
-            self.gl.tex_sub_image_2d(
+                src_x as i32,
+                src_y as i32,
+                0,
+                self.vram_texture,
                 glow::TEXTURE_2D,
                 0,
                 dst_x as i32,
                 dst_y as i32,
-                w as i32,
-                h as i32,
-                glow::RED_INTEGER,
-                glow::UNSIGNED_SHORT,
-                glow::PixelUnpackData::Slice(bytemuck::cast_slice(&region)),
-            );
-
-            // Write to vram_texture_fbo (RGBA8)
-            let rgba: Vec<u8> = region
-                .iter()
-                .flat_map(|&p| {
-                    let r = ((p & 0x001F) << 3) as u8;
-                    let g = (((p >> 5) & 0x1F) << 3) as u8;
-                    let b = (((p >> 10) & 0x1F) << 3) as u8;
-                    [r, g, b, 255u8]
-                })
-                .collect();
-
-            self.gl
-                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture_fbo));
-            self.gl.tex_sub_image_2d(
-                glow::TEXTURE_2D,
                 0,
-                dst_x as i32,
-                dst_y as i32,
                 w as i32,
                 h as i32,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(&rgba),
+                1,
             );
+
+            // TODO handle mask
+            let _ = mask;
 
             check_gl_errors(&self.gl, "copy_rect");
         }
@@ -873,29 +793,25 @@ impl GpuBackend for OpenGlBackend {
 
     fn vram_read_begin(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16) {
         unsafe {
-            let mut full_rgba = vec![0u8; 1024 * 512 * 4];
-
+            // Copy the whole VRAM texture to CPU memory, then extract the requested rectangle
+            let mut full = vec![0u16; 1024 * 512];
             self.gl
-                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture_fbo));
+                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
             self.gl.get_tex_image(
                 glow::TEXTURE_2D,
                 0,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(&mut full_rgba),
+                glow::RED_INTEGER,
+                glow::UNSIGNED_SHORT,
+                glow::PixelPackData::Slice(bytemuck::cast_slice_mut(&mut full)),
             );
 
+            // Extract the requested rectangle into a new vector
             let mut pixels = vec![0u16; w as usize * h as usize];
             for row in 0..h as usize {
                 for col in 0..w as usize {
-                    let src_x = vram_x as usize + col;
-                    let src_y = vram_y as usize + row;
-                    let idx = (src_y * 1024 + src_x) * 4;
-                    let r = full_rgba[idx] >> 3;
-                    let g = full_rgba[idx + 1] >> 3;
-                    let b = full_rgba[idx + 2] >> 3;
-                    pixels[row * w as usize + col] =
-                        (r as u16) | ((g as u16) << 5) | ((b as u16) << 10);
+                    let sx = vram_x as usize + col;
+                    let sy = vram_y as usize + row;
+                    pixels[row * w as usize + col] = full[sy * 1024 + sx];
                 }
             }
 
@@ -947,13 +863,12 @@ impl GpuBackend for OpenGlBackend {
             return;
         };
 
+        // Accumulate pixels in the transfer buffer, and when we reach the end of the rectangle, upload to GPU
         for pixel in [word as u16, (word >> 16) as u16] {
             if transfer.current_y >= transfer.y + transfer.h {
                 break;
             }
-
-            transfer.pixels.push(pixel); // raw BGR555, no decode
-
+            transfer.pixels.push(pixel);
             transfer.current_x += 1;
             if transfer.current_x >= transfer.x + transfer.w {
                 transfer.current_x = transfer.x;
@@ -968,22 +883,12 @@ impl GpuBackend for OpenGlBackend {
             let w = transfer.w as i32;
             let h = transfer.h as i32;
             let pixels_u16 = transfer.pixels.clone();
-
-            // decode BGR555 -> RGBA8 for fbo texture
-            let pixels_rgba: Vec<u8> = pixels_u16
-                .iter()
-                .flat_map(|&p| {
-                    let r = ((p & 0x001F) << 3) as u8;
-                    let g = (((p >> 5) & 0x1F) << 3) as u8;
-                    let b = (((p >> 10) & 0x1F) << 3) as u8;
-                    [r, g, b, 255u8]
-                })
-                .collect();
-
             self.vram_transfer = None;
 
+            // We're done, so upload them directly to the VRAM texture on the GPU
             unsafe {
-                // upload raw u16 to vram_texture
+                // By default OpenGL expects 4-byte alignment for pixel data, but our VRAM is 2 bytes per pixel, so we
+                // need to set the unpack alignment to 2
                 self.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 2);
                 self.gl
                     .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
@@ -999,22 +904,6 @@ impl GpuBackend for OpenGlBackend {
                     glow::PixelUnpackData::Slice(bytemuck::cast_slice(&pixels_u16)),
                 );
                 self.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
-
-                // upload decoded RGBA8 to vram_fbo_texture
-                self.gl
-                    .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture_fbo));
-                self.gl.tex_sub_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    x,
-                    y,
-                    w,
-                    h,
-                    glow::RGBA,
-                    glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(&pixels_rgba),
-                );
-
                 check_gl_errors(&self.gl, "vram_texture upload");
             }
         }
@@ -1028,27 +917,27 @@ impl GpuBackend for OpenGlBackend {
         unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 
-            // get actual window size
+            // Get actual window size
             let win_w = self.window_width as f32;
             let win_h = self.window_height as f32;
 
-            // compute letterbox — fit w x h into window keeping aspect ratio
+            // Compute letterbox fit for the VRAM rectangle in the window, preserving aspect ratio
             let src_aspect = w as f32 / h as f32;
             let win_aspect = win_w / win_h;
 
             let (dest_w, dest_h, dest_x, dest_y) = if win_aspect > src_aspect {
-                // window is wider — pillarbox (black bars on sides)
+                // Window is wider, bars on each side
                 let scaled_w = win_h * src_aspect;
                 let x_offset = (win_w - scaled_w) / 2.0;
                 (scaled_w, win_h, x_offset, 0.0)
             } else {
-                // window is taller — letterbox (black bars top/bottom)
+                // Window is taller, bars on top and bottom
                 let scaled_h = win_w / src_aspect;
                 let y_offset = (win_h - scaled_h) / 2.0;
                 (win_w, scaled_h, 0.0, y_offset)
             };
 
-            // set viewport to full window, clear to black
+            // Set viewport to full window, clear to black
             self.gl
                 .viewport(0, 0, self.window_width as i32, self.window_height as i32);
             self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
@@ -1063,7 +952,7 @@ impl GpuBackend for OpenGlBackend {
             self.gl.use_program(Some(self.present_program));
             self.gl.active_texture(glow::TEXTURE0);
             self.gl
-                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture_fbo));
+                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
 
             let loc = |name| self.gl.get_uniform_location(self.present_program, name);
             self.gl.uniform_1_i32(loc("vram").as_ref(), 0);

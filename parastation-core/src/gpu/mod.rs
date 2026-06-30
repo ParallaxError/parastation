@@ -355,20 +355,15 @@ impl Gpu {
         128 halfwords).
         */
 
-        let src_pos = Vertex::from_word(self.gp0_buffer[1]);
-        let dest_pos = Vertex::from_word(self.gp0_buffer[2]);
+        let src_x = (self.gp0_buffer[1] & 0x3FF) as u16;
+        let src_y = ((self.gp0_buffer[1] >> 16) & 0x1FF) as u16;
+        let dst_x = (self.gp0_buffer[2] & 0x3FF) as u16;
+        let dst_y = ((self.gp0_buffer[2] >> 16) & 0x1FF) as u16;
         let w = (self.gp0_buffer[3] & 0x3FF) as u16;
         let h = ((self.gp0_buffer[3] >> 16) & 0x1FF) as u16;
 
-        self.backend.copy_rect(
-            src_pos.x as u16,
-            src_pos.y as u16,
-            dest_pos.x as u16,
-            dest_pos.y as u16,
-            w,
-            h,
-            &self.state.mask,
-        );
+        self.backend
+            .copy_rect(src_x, src_y, dst_x, dst_y, w, h, &self.state.mask);
     }
 }
 
@@ -415,17 +410,18 @@ impl Gpu {
             texture_window: self.state.texture_window.clone(),
         }
     }
-    /*
-    GP0(28h) - Monochrome four-point polygon, opaque
-    GP0(2Ah) - Monochrome four-point polygon, semi-transparent
-    1st  Color+Command     (CcBbGgRrh)
-    2nd  Vertex1           (YyyyXxxxh)
-    3rd  Vertex2           (YyyyXxxxh)
-    4th  Vertex3           (YyyyXxxxh)
-    (5th) Vertex4           (YyyyXxxxh) (if any)
-    */
 
     fn draw_monochrome_quad(&mut self) {
+        /*
+        GP0(28h) - Monochrome four-point polygon, opaque
+        GP0(2Ah) - Monochrome four-point polygon, semi-transparent
+        1st  Color+Command     (CcBbGgRrh)
+        2nd  Vertex1           (YyyyXxxxh)
+        3rd  Vertex2           (YyyyXxxxh)
+        4th  Vertex3           (YyyyXxxxh)
+        (5th) Vertex4           (YyyyXxxxh) (if any)
+        */
+
         let cmd = (self.gp0_buffer[0] >> 24) as u8;
         let colour = Colour::from_word(self.gp0_buffer[0]);
         let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
@@ -453,21 +449,22 @@ impl Gpu {
         self.backend.draw_polygon(&quad, &self.get_draw_params());
     }
 
-    /*
-    GP0(24h) - Textured three-point polygon, opaque, texture-blending
-    GP0(25h) - Textured three-point polygon, opaque, raw-texture
-    GP0(26h) - Textured three-point polygon, semi-transparent, texture-blending
-    GP0(27h) - Textured three-point polygon, semi-transparent, raw-texture
-
-    1st  Color+Command     (CcBbGgRrh) (color is ignored for raw-textures)
-    2nd  Vertex1           (YyyyXxxxh)
-    3rd  Texcoord1+Palette (ClutYyXxh)
-    4th  Vertex2           (YyyyXxxxh)
-    5th  Texcoord2+Texpage (PageYyXxh)
-    6th  Vertex3           (YyyyXxxxh)
-    7th  Texcoord3         (0000YyXxh)
-     */
     fn draw_textured_tri(&mut self) {
+        /*
+        GP0(24h) - Textured three-point polygon, opaque, texture-blending
+        GP0(25h) - Textured three-point polygon, opaque, raw-texture
+        GP0(26h) - Textured three-point polygon, semi-transparent, texture-blending
+        GP0(27h) - Textured three-point polygon, semi-transparent, raw-texture
+
+        1st  Color+Command     (CcBbGgRrh) (color is ignored for raw-textures)
+        2nd  Vertex1           (YyyyXxxxh)
+        3rd  Texcoord1+Palette (ClutYyXxh)
+        4th  Vertex2           (YyyyXxxxh)
+        5th  Texcoord2+Texpage (PageYyXxh)
+        6th  Vertex3           (YyyyXxxxh)
+        7th  Texcoord3         (0000YyXxh)
+        */
+
         let cmd = (self.gp0_buffer[0] >> 24) as u8;
         let colour = Colour::from_word(self.gp0_buffer[0]);
         let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
@@ -489,6 +486,15 @@ impl Gpu {
             _ => unreachable!(),
         };
 
+        let tex_page = TexPageAttr::from_word(self.gp0_buffer[4] >> 16);
+
+        // Textured polygons implicitly update the persistent state, weird quirk
+        // https://emudocs.layle.dev/PSX/Games/#fragmented-graphics
+        self.state.draw_mode.texture_base_x = tex_page.x;
+        self.state.draw_mode.texture_base_y = tex_page.y;
+        self.state.draw_mode.semi_transparency = tex_page.semi_transparency;
+        self.state.draw_mode.texture_page_colours = tex_page.colour_depth;
+
         let tri = Polygon::Textured {
             colour: colour,
             vertices: PolygonVertices::Tri(
@@ -508,7 +514,7 @@ impl Gpu {
             semi_transparent: semi_transparent,
             texture_params: TextureParams {
                 clut: Clut::from_word(self.gp0_buffer[2]),
-                tex_page: TexPageAttr::from_word(self.gp0_buffer[4] >> 16),
+                tex_page,
                 raw_texture,
             },
         };
@@ -516,23 +522,23 @@ impl Gpu {
         self.backend.draw_polygon(&tri, &self.get_draw_params());
     }
 
-    /*
-    GP0(2Ch) - Textured four-point polygon, opaque, texture-blending
-    GP0(2Dh) - Textured four-point polygon, opaque, raw-texture
-    GP0(2Eh) - Textured four-point polygon, semi-transparent, texture-blending
-    GP0(2Fh) - Textured four-point polygon, semi-transparent, raw-texture
-    1st  Color+Command     (CcBbGgRrh) (color is ignored for raw-textures)
-    2nd  Vertex1           (YyyyXxxxh)
-    3rd  Texcoord1+Palette (ClutYyXxh)
-    4th  Vertex2           (YyyyXxxxh)
-    5th  Texcoord2+Texpage (PageYyXxh)
-    6th  Vertex3           (YyyyXxxxh)
-    7th  Texcoord3         (0000YyXxh)
-    (8th) Vertex4           (YyyyXxxxh) (if any)
-    (9th) Texcoord4         (0000YyXxh) (if any)
-     */
-
     fn draw_textured_quad(&mut self) {
+        /*
+        GP0(2Ch) - Textured four-point polygon, opaque, texture-blending
+        GP0(2Dh) - Textured four-point polygon, opaque, raw-texture
+        GP0(2Eh) - Textured four-point polygon, semi-transparent, texture-blending
+        GP0(2Fh) - Textured four-point polygon, semi-transparent, raw-texture
+        1st  Color+Command     (CcBbGgRrh) (color is ignored for raw-textures)
+        2nd  Vertex1           (YyyyXxxxh)
+        3rd  Texcoord1+Palette (ClutYyXxh)
+        4th  Vertex2           (YyyyXxxxh)
+        5th  Texcoord2+Texpage (PageYyXxh)
+        6th  Vertex3           (YyyyXxxxh)
+        7th  Texcoord3         (0000YyXxh)
+        (8th) Vertex4           (YyyyXxxxh) (if any)
+        (9th) Texcoord4         (0000YyXxh) (if any)
+        */
+
         let cmd = (self.gp0_buffer[0] >> 24) as u8;
         let colour = Colour::from_word(self.gp0_buffer[0]);
         let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
@@ -555,6 +561,15 @@ impl Gpu {
             0x2D | 0x2F => true,
             _ => unreachable!(),
         };
+
+        let tex_page = TexPageAttr::from_word(self.gp0_buffer[4] >> 16);
+
+        // Textured polygons implicitly update the persistent state, weird quirk
+        // https://emudocs.layle.dev/PSX/Games/#fragmented-graphics
+        self.state.draw_mode.texture_base_x = tex_page.x;
+        self.state.draw_mode.texture_base_y = tex_page.y;
+        self.state.draw_mode.semi_transparency = tex_page.semi_transparency;
+        self.state.draw_mode.texture_page_colours = tex_page.colour_depth;
 
         let quad = Polygon::Textured {
             colour: colour,
@@ -587,18 +602,20 @@ impl Gpu {
         self.backend.draw_polygon(&quad, &self.get_draw_params());
     }
 
-    /*
-    1st  Color1+Command    (CcBbGgRrh)
-    2nd  Vertex1           (YyyyXxxxh)
-    3rd  Color2            (00BbGgRrh)
-    4th  Vertex2           (YyyyXxxxh)
-    5th  Color3            (00BbGgRrh)
-    6th  Vertex3           (YyyyXxxxh)
-    (7th) Color4            (00BbGgRrh) (if any)
-    (8th) Vertex4           (YyyyXxxxh) (if any)
-     */
-
     fn draw_shaded_tri(&mut self) {
+        /*
+        GP0(30h) - Shaded three-point polygon, opaque
+        GP0(32h) - Shaded three-point polygon, semi-transparent
+        1st  Color1+Command    (CcBbGgRrh)
+        2nd  Vertex1           (YyyyXxxxh)
+        3rd  Color2            (00BbGgRrh)
+        4th  Vertex2           (YyyyXxxxh)
+        5th  Color3            (00BbGgRrh)
+        6th  Vertex3           (YyyyXxxxh)
+        (7th) Color4            (00BbGgRrh) (if any)
+        (8th) Vertex4           (YyyyXxxxh) (if any)
+        */
+
         let cmd = (self.gp0_buffer[0] >> 24) as u8;
         let colour1 = Colour::from_word(self.gp0_buffer[0]);
         let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
@@ -635,6 +652,19 @@ impl Gpu {
     }
 
     fn draw_shaded_quad(&mut self) {
+        /*
+        GP0(38h) - Shaded four-point polygon, opaque
+        GP0(3Ah) - Shaded four-point polygon, semi-transparent
+        1st  Color1+Command    (CcBbGgRrh)
+        2nd  Vertex1           (YyyyXxxxh)
+        3rd  Color2            (00BbGgRrh)
+        4th  Vertex2           (YyyyXxxxh)
+        5th  Color3            (00BbGgRrh)
+        6th  Vertex3           (YyyyXxxxh)
+        (7th) Color4            (00BbGgRrh) (if any)
+        (8th) Vertex4           (YyyyXxxxh) (if any)
+        */
+
         let cmd = (self.gp0_buffer[0] >> 24) as u8;
         let colour1 = Colour::from_word(self.gp0_buffer[0]);
         let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
