@@ -2,9 +2,11 @@ mod dummy_gpu_backend;
 mod opengl_backend;
 use opengl_backend::OpenGlBackend;
 
+use std::env;
+use std::time::{Duration, Instant};
+
 use parastation_core::bios::Bios;
 use parastation_core::{Interpreter, Ps1};
-use std::env;
 
 use glutin::config::ConfigTemplateBuilder;
 use glutin::context::ContextAttributesBuilder;
@@ -104,6 +106,10 @@ fn main() {
     // });
     // ps1.load_exe(&exe_data);
 
+    // Only call display at a set FPS
+    let frame_duration = Duration::from_secs_f64(1.0 / 60.0);
+    let mut last_display = Instant::now();
+
     // Run PS1
     event_loop
         .run(move |event, elwt| {
@@ -112,8 +118,11 @@ fn main() {
             match event {
                 Event::AboutToWait => {
                     ps1.run(33000);
-                    ps1.display();
-                    gl_surface.swap_buffers(&gl_context).unwrap();
+                    if last_display.elapsed() >= frame_duration {
+                        ps1.display();
+                        gl_surface.swap_buffers(&gl_context).unwrap();
+                        last_display = Instant::now();
+                    }
                 }
                 Event::WindowEvent {
                     event: WindowEvent::CloseRequested,
