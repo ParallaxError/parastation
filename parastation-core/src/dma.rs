@@ -383,6 +383,11 @@ impl DmaController {
         }
     }
 
+    /// Returns true if the given offset corresponds to a DMA channel control register (D#_CHCR)
+    pub fn is_chcr(offset: u32) -> bool {
+        offset % 0x10 == 8 && offset <= 0x68
+    }
+
     pub fn write_register(&mut self, offset: u32, value: u32) {
         match offset {
             0x00..=0x60 if offset % 0x10 == 0 => {

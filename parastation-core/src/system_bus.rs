@@ -12,13 +12,15 @@
  */
 
 // Imports
+use crate::VBLANK_CYCLES;
 use crate::bios::Bios;
 use crate::cd_rom::CdRom;
 use crate::dma::{DmaController, DmaTransfer};
 use crate::gpu::{Gpu, GpuBackend};
-use crate::interrupt_controller::InterruptController;
+use crate::interrupt_controller::{Interrupt, InterruptController};
 use crate::memory_map::*;
 use crate::ram::Ram;
+use crate::scheduler::{Scheduler, SchedulerEvent};
 use crate::scratchpad::Scratchpad;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -35,6 +37,8 @@ enum AccessWidth {
 ///
 /// For the CPU, just exposes read and write interfaces for memory access.
 pub struct SystemBus {
+    scheduler: Scheduler,
+
     // Owned memories
     bios: Bios,
     ram: Ram,
@@ -47,7 +51,12 @@ pub struct SystemBus {
 
 impl SystemBus {
     pub fn new(bios: Bios, gpu_backend: Box<dyn GpuBackend>) -> Self {
+        // Create scheduler and schedule an initial VBlank interrupt to occur
+        let mut scheduler = Scheduler::new();
+        scheduler.schedule(SchedulerEvent::VBlank, VBLANK_CYCLES);
+
         Self {
+            scheduler,
             bios,
             ram: Ram::new(),
             scratchpad: Scratchpad::new(),
@@ -130,7 +139,9 @@ macro_rules! bus_write {
             return $self.scratchpad.$method(offset, $value);
         }
         if let Some(offset) = CDROM_REGISTERS.contains(addr) {
-            return $self.cd_rom.write_register(offset, $value as u8);
+            return $self
+                .cd_rom
+                .write_register(offset, $value as u8, &mut $self.scheduler);
         }
         if let Some(_) = EXP2.contains(addr) {
             return;
@@ -204,7 +215,11 @@ impl SystemBus {
             return self.write_interrupt_control(offset, value as u16);
         }
         if let Some(offset) = DMA_REGISTERS.contains(addr) {
-            return self.dma.write_register(offset, value);
+            self.dma.write_register(offset, value);
+            if DmaController::is_chcr(offset) {
+                self.tick_dma();
+            }
+            return;
         }
         if let Some(_offset) = TIMERS.contains(addr) {
             return;
@@ -412,10 +427,37 @@ impl SystemBus {
 
 // Hardware access exposed to the top level
 impl SystemBus {
-    /// Tick the system bus, which will tick the DMA controller and any other peripherals that need to be updated.
+    /// Tick the system bus, advancing the scheduler and processing any pending peripheral events
     pub fn tick(&mut self, cycles: u32) {
-        self.tick_dma();
-        self.cd_rom.tick(cycles, &mut self.interrupt_controller);
+        let to_service = self.scheduler.advance(cycles);
+
+        // Process any events that require servicing, hopefully slippage was minimal
+        for event in to_service {
+            match event {
+                SchedulerEvent::VBlank => {
+                    self.interrupt_controller.raise_interrupt(Interrupt::VBlank);
+                    self.scheduler
+                        .schedule(SchedulerEvent::VBlank, VBLANK_CYCLES);
+                }
+                SchedulerEvent::CdRomResponse { bytes, int_code } => {
+                    self.cd_rom.handle_response_event(
+                        bytes,
+                        int_code,
+                        &mut self.scheduler,
+                        &mut self.interrupt_controller,
+                    );
+                }
+                SchedulerEvent::CdRomSectorRead => {
+                    self.cd_rom.handle_sector_read_event(
+                        &mut self.scheduler,
+                        &mut self.interrupt_controller,
+                    );
+                }
+                _ => {
+                    eprintln!("Unhandled scheduler event: {:?}", event);
+                }
+            }
+        }
     }
 
     /// Insert a disc into the CD-ROM drive from the provided .cue file path.

@@ -4,6 +4,7 @@ in vec3 frag_colour;
 out uvec4 out_colour;
 
 void main() {
+    // TODO: Dithering
     float cr = clamp(frag_colour.r, 0.0, 1.0);
     float cg = clamp(frag_colour.g, 0.0, 1.0);
     float cb = clamp(frag_colour.b, 0.0, 1.0);

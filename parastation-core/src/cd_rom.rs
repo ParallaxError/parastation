@@ -13,6 +13,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
 use crate::interrupt_controller::{Interrupt, InterruptController};
+use crate::scheduler::{Scheduler, SchedulerEvent};
 
 const SECTOR_SIZE: usize = 2352; // Size of a CD-ROM sector in bytes
 
@@ -37,42 +38,26 @@ struct Track {
     file_offset: u64,         // Byte offset within the file where the track data starts
 }
 
-// TODO global scheduler would be way better
-
-enum CdRomEventKind {
-    Response(Vec<u8>),
-    SectorRead,
-}
-
-/// Deferred CDROM response that fires when the number of cycles remaining reaches 0, and any previous response has
-/// been acknowledged. The response is then delivered with the interrupt of the specified code and the given response
-/// bytes.
-struct CdRomEvent {
-    cycles_remaining: u32,
-    kind: CdRomEventKind,
-    interrupt_code: u8,
-}
-
 // Response timings
 // First response delays
 mod cdrom_timing {
-    pub const GETSTAT: u32 = 0x000c4e1;
-    pub const GETSTAT_STOPPED: u32 = 0x0005cf4;
-    pub const INIT_FIRST: u32 = 0x0013cce;
-    pub const DEFAULT_FIRST: u32 = 0x000c4e1; // Fallback, need to test all commands
+    pub const GETSTAT: u64 = 0x000c4e1;
+    pub const GETSTAT_STOPPED: u64 = 0x0005cf4;
+    pub const INIT_FIRST: u64 = 0x0013cce;
+    pub const DEFAULT_FIRST: u64 = 0x000c4e1; // Fallback, need to test all commands
 
     // Second response delays
-    pub const GETID_SECOND: u32 = 0x0004a00;
-    pub const PAUSE_SECOND_1X: u32 = 0x021181c;
-    pub const PAUSE_SECOND_2X: u32 = 0x010bd93;
-    pub const PAUSE_SECOND_ALREADY_PAUSED: u32 = 0x0001df2;
-    pub const STOP_SECOND_1X: u32 = 0x0d38aca;
-    pub const STOP_SECOND_2X: u32 = 0x18a6076;
-    pub const STOP_SECOND_ALREADY_STOPPED: u32 = 0x0001d7b;
+    pub const GETID_SECOND: u64 = 0x0004a00;
+    pub const PAUSE_SECOND_1X: u64 = 0x021181c;
+    pub const PAUSE_SECOND_2X: u64 = 0x010bd93;
+    pub const PAUSE_SECOND_ALREADY_PAUSED: u64 = 0x0001df2;
+    pub const STOP_SECOND_1X: u64 = 0x0d38aca;
+    pub const STOP_SECOND_2X: u64 = 0x18a6076;
+    pub const STOP_SECOND_ALREADY_STOPPED: u64 = 0x0001d7b;
 
     // INT1 rate (per-sector delay during ReadN/ReadS)
-    pub const READ_INT1_1X: u32 = 0x006e1cd;
-    pub const READ_INT1_2X: u32 = 0x0036cd2;
+    pub const READ_INT1_1X: u64 = 0x006e1cd;
+    pub const READ_INT1_2X: u64 = 0x0036cd2;
 }
 
 /// CD-ROM controller to handle commands and disk access.
@@ -83,7 +68,6 @@ pub struct CdRom {
     command_result: VecDeque<u8>, // Result of the last command
     interrupt_flags: u8,   // Interrupt flags for the CD-ROM controller (lower nybble of CDREG3)
     interrupt_enable: u8,  // IRQ enable mask
-    event_queue: VecDeque<CdRomEvent>, // Queue of deferred CD-ROM events
     mode: u8,              // Mode set by the Setmode command (0x0E)
 
     seek_target: Option<u32>, // Target logical block address for seek operations
@@ -119,7 +103,6 @@ impl CdRom {
             command_result: VecDeque::new(),
             interrupt_flags: 0,
             interrupt_enable: 0,
-            event_queue: VecDeque::new(),
             mode: 0,
 
             seek_target: None,
@@ -228,35 +211,50 @@ impl CdRom {
         });
     }
 
-    /// Emulate the CD-ROM execution for a given number of cycles
-    pub fn tick(&mut self, cycles: u32, interrupt_controller: &mut InterruptController) {
-        // Only the front event counts down, others wait
-        // Also need interrupts to be acked in order to execute a pending event
-        if let Some(event) = self.event_queue.front_mut() {
-            if event.cycles_remaining <= cycles {
-                event.cycles_remaining = 0;
-            } else {
-                event.cycles_remaining -= cycles;
-            }
-
-            if event.cycles_remaining == 0 && self.interrupt_flags == 0 {
-                // Only deliver once previous IRQ has been acked (interrupt_flags cleared)
-                let event = self.event_queue.pop_front().unwrap();
-                match event.kind {
-                    CdRomEventKind::Response(bytes) => self.push_response(&bytes),
-                    CdRomEventKind::SectorRead => {
-                        self.perform_sector_read();
-                        self.push_response(&[self.get_status_byte()]);
-
-                        // ReadN keeps going — schedule the NEXT sector now, if still reading
-                        if self.reading {
-                            self.schedule_sector_read();
-                        }
-                    }
-                }
-                self.set_interrupt(event.interrupt_code, interrupt_controller);
-            }
+    /// Handle a CdRomSectorRead event from the scheduler, reading the next sector and scheduling the next read if
+    /// necessary
+    pub fn handle_sector_read_event(
+        &mut self,
+        scheduler: &mut Scheduler,
+        interrupt_controller: &mut InterruptController,
+    ) {
+        // TODO Do I need a check here? It should never do a sector read if it's paused since I cancel...
+        if !self.reading {
+            return;
         }
+
+        if self.interrupt_flags != 0 {
+            // Previous response not acknowledged, so need to retry later
+            // TODO magic
+            scheduler.schedule(SchedulerEvent::CdRomSectorRead, 1000);
+            return;
+        }
+
+        self.perform_sector_read();
+        self.push_response(&[self.get_status_byte()]);
+        self.set_interrupt(1, interrupt_controller);
+        self.schedule_sector_read(scheduler);
+    }
+
+    /// Handle a CdRomResponse event from the scheduler, pushing the response bytes to the FIFO and raising the
+    /// interrupt
+    pub fn handle_response_event(
+        &mut self,
+        bytes: Vec<u8>,
+        int_code: u8,
+        scheduler: &mut Scheduler,
+        interrupt_controller: &mut InterruptController,
+    ) {
+        if self.interrupt_flags != 0 {
+            // Previous IRQ not acknowledged, so we need to retry this response later
+            scheduler.schedule(
+                SchedulerEvent::CdRomResponse { bytes, int_code },
+                1000, // TODO magic
+            );
+            return;
+        }
+        self.push_response(&bytes);
+        self.set_interrupt(int_code, interrupt_controller);
     }
 }
 
@@ -272,10 +270,10 @@ impl CdRom {
         }
     }
 
-    pub fn write_register(&mut self, offset: u32, value: u8) {
+    pub fn write_register(&mut self, offset: u32, value: u8, scheduler: &mut Scheduler) {
         match offset {
             0 => self.write_offset_0(value),
-            1 => self.write_offset_1(value),
+            1 => self.write_offset_1(value, scheduler),
             2 => self.write_offset_2(value),
             3 => self.write_offset_3(value),
             _ => unreachable!("CD-ROM write to invalid offset {:02X}", offset),
@@ -341,13 +339,13 @@ impl CdRom {
         }
     }
 
-    fn write_command_byte(&mut self, value: u8) {
-        self.execute_command(value);
+    fn write_command_byte(&mut self, value: u8, scheduler: &mut Scheduler) {
+        self.execute_command(value, scheduler);
     }
 
-    fn write_offset_1(&mut self, value: u8) {
+    fn write_offset_1(&mut self, value: u8, scheduler: &mut Scheduler) {
         match self.register_index {
-            0 => self.write_command_byte(value),
+            0 => self.write_command_byte(value, scheduler),
             1 => println!("Sound map data out set to {:02X}", value),
             2 => println!("Sound map coding info set to {:02X}", value),
             3 => println!(
@@ -493,18 +491,15 @@ impl CdRom {
 
 // Disc reading
 impl CdRom {
-    fn schedule_sector_read(&mut self) {
+    fn schedule_sector_read(&mut self, scheduler: &mut Scheduler) {
         // Bit 7 of mode indicates double speed
-        let delay = if self.mode & 0x80 != 0 {
+        let delay: u64 = if self.mode & 0x80 != 0 {
             cdrom_timing::READ_INT1_2X
         } else {
             cdrom_timing::READ_INT1_1X
         };
-        self.event_queue.push_back(CdRomEvent {
-            cycles_remaining: delay,
-            kind: CdRomEventKind::SectorRead,
-            interrupt_code: 1, // INT1 — DataReady
-        });
+
+        scheduler.schedule(SchedulerEvent::CdRomSectorRead, delay);
     }
 
     fn perform_sector_read(&mut self) {
@@ -561,34 +556,34 @@ impl CdRom {
 // Command execution
 impl CdRom {
     // Dispatch
-    fn execute_command(&mut self, cmd: u8) {
+    fn execute_command(&mut self, cmd: u8, scheduler: &mut Scheduler) {
         match cmd {
-            0x01 => self.cmd_getstat(),
-            0x02 => self.cmd_setloc(),
-            0x06 => self.cmd_readn(),
-            0x09 => self.cmd_pause(),
-            0x0A => self.cmd_init(),
-            0x0C => self.cmd_demute(),
-            0x0E => self.cmd_setmode(),
-            0x15 => self.cmd_seekl(),
-            0x19 => self.cmd_test(),
-            0x1A => self.cmd_getid(),
-            0x1B => self.cmd_reads(),
+            0x01 => self.cmd_getstat(scheduler),
+            0x02 => self.cmd_setloc(scheduler),
+            0x06 => self.cmd_readn(scheduler),
+            0x09 => self.cmd_pause(scheduler),
+            0x0A => self.cmd_init(scheduler),
+            0x0C => self.cmd_demute(scheduler),
+            0x0E => self.cmd_setmode(scheduler),
+            0x15 => self.cmd_seekl(scheduler),
+            0x19 => self.cmd_test(scheduler),
+            0x1A => self.cmd_getid(scheduler),
+            0x1B => self.cmd_reads(scheduler),
             _ => eprintln!("Unrecognized CD-ROM command 0x{:02X}", cmd),
         }
         self.command_args.clear(); // Clear the parameter FIFO after executing the command
     }
 
     // 0x01
-    fn cmd_getstat(&mut self) {
+    fn cmd_getstat(&mut self, scheduler: &mut Scheduler) {
         // Raise INT3 and send the status byte in the response FIFO
         let status_byte = self.get_status_byte();
         let response = [status_byte];
-        self.schedule_event(cdrom_timing::GETSTAT, response.to_vec(), 3);
+        self.schedule_event(cdrom_timing::GETSTAT, response.to_vec(), 3, scheduler);
     }
 
     // 0x02
-    fn cmd_setloc(&mut self) {
+    fn cmd_setloc(&mut self, scheduler: &mut Scheduler) {
         /*
         Setloc - Command 02h,amm,ass,asect --> INT3(stat)
         Sets the seek target - but without yet starting the seek operation. The actual seek is invoked by certain
@@ -605,7 +600,12 @@ impl CdRom {
         let ss = bcd_to_decimal(self.command_args.get(1).copied().unwrap_or(0));
         let sect = bcd_to_decimal(self.command_args.get(2).copied().unwrap_or(0));
 
-        self.schedule_event(cdrom_timing::DEFAULT_FIRST, vec![self.get_status_byte()], 3);
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![self.get_status_byte()],
+            3,
+            scheduler,
+        );
 
         // 2 seconds of lead in on PS1 cd-roms supposedly... annoying.
         let lba = msf_to_lba(mm, ss, sect) - 150;
@@ -613,14 +613,19 @@ impl CdRom {
     }
 
     // 0x06
-    fn cmd_readn(&mut self) {
+    fn cmd_readn(&mut self, scheduler: &mut Scheduler) {
         /*
         ReadN - Command 06h --> INT3(stat) --> INT1(stat) --> datablock
         Read with retry. The command responds once with "stat,INT3", and then it's repeatedly sending
         "stat,INT1 --> datablock", that is continued even after a successful read has occured; use the Pause command to
         terminate the repeated INT1 responses.
         */
-        self.schedule_event(cdrom_timing::DEFAULT_FIRST, vec![self.get_status_byte()], 3);
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![self.get_status_byte()],
+            3,
+            scheduler,
+        );
 
         // Seek to our target if we have one first, no need to call seekl
         if let Some(target) = self.seek_target.take() {
@@ -628,11 +633,11 @@ impl CdRom {
         }
 
         self.reading = true;
-        self.schedule_sector_read();
+        self.schedule_sector_read(scheduler);
     }
 
     // 0x09
-    fn cmd_pause(&mut self) {
+    fn cmd_pause(&mut self, scheduler: &mut Scheduler) {
         /*
         Pause - Command 09h --> INT3(stat) --> INT2(stat)
         Aborts Reading and Playing, the motor is kept spinning, and the drive head maintains the current location
@@ -655,16 +660,20 @@ impl CdRom {
         let status_while_reading = self.get_status_byte();
         self.reading = false;
 
-        // Abort any already-scheduled sector reads — Pause stops reading immediately
-        self.event_queue
-            .retain(|event| !matches!(event.kind, CdRomEventKind::SectorRead));
+        // Cancel any pending sector read events
+        scheduler.cancel(|event| matches!(event, SchedulerEvent::CdRomSectorRead));
 
-        self.schedule_event(cdrom_timing::DEFAULT_FIRST, vec![status_while_reading], 3);
-        self.schedule_event(pause_time, vec![self.get_status_byte()], 2);
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![status_while_reading],
+            3,
+            scheduler,
+        );
+        self.schedule_event(pause_time, vec![self.get_status_byte()], 2, scheduler);
     }
 
     // 0x0A
-    fn cmd_init(&mut self) {
+    fn cmd_init(&mut self, scheduler: &mut Scheduler) {
         /*
         Init - Command 0Ah --> INT3(stat) --> INT2(stat)
         Multiple effects at once. Sets mode=20h, activates drive motor, Standby, abort all commands.
@@ -673,12 +682,22 @@ impl CdRom {
         // TODO motor
         self.mode = 0x20; // Set mode to 20h
 
-        self.schedule_event(cdrom_timing::DEFAULT_FIRST, vec![self.get_status_byte()], 3);
-        self.schedule_event(cdrom_timing::DEFAULT_FIRST, vec![self.get_status_byte()], 2);
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![self.get_status_byte()],
+            3,
+            scheduler,
+        );
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![self.get_status_byte()],
+            2,
+            scheduler,
+        );
     }
 
     // 0x0C
-    fn cmd_demute(&mut self) {
+    fn cmd_demute(&mut self, scheduler: &mut Scheduler) {
         /*
         Demute - Command 0Ch --> INT3(stat)
         Turn on audio streaming to SPU (affects both CD-DA and XA-ADPCM). The Demute command is needed only if one has
@@ -686,11 +705,16 @@ impl CdRom {
         and is demuted after cdrom-booting).
         */
 
-        self.schedule_event(cdrom_timing::DEFAULT_FIRST, vec![self.get_status_byte()], 3);
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![self.get_status_byte()],
+            3,
+            scheduler,
+        );
     }
 
     // 0x0E
-    fn cmd_setmode(&mut self) {
+    fn cmd_setmode(&mut self, scheduler: &mut Scheduler) {
         /*
         Setmode - Command 0Eh,mode --> INT3(stat)
         7   Speed       (0=Normal speed, 1=Double speed)
@@ -704,11 +728,16 @@ impl CdRom {
         */
 
         self.mode = self.command_args.get(0).copied().unwrap_or(0);
-        self.schedule_event(cdrom_timing::DEFAULT_FIRST, vec![self.get_status_byte()], 3);
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![self.get_status_byte()],
+            3,
+            scheduler,
+        );
     }
 
     // 0x15
-    fn cmd_seekl(&mut self) {
+    fn cmd_seekl(&mut self, scheduler: &mut Scheduler) {
         /*
         SeekL - Command 15h --> INT3(stat) --> INT2(stat)
         Seek to Setloc's location in data mode (using data sector header position data, which works/exists only on Data
@@ -716,7 +745,12 @@ impl CdRom {
         seeking sector N, it does stay at around N-8..N-0 in single speed mode, or at around N-5..N+2 in double speed
         mode).
          */
-        self.schedule_event(cdrom_timing::DEFAULT_FIRST, vec![self.get_status_byte()], 3);
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![self.get_status_byte()],
+            3,
+            scheduler,
+        );
 
         // Consume the seek target and update our current location
         if let Some(target) = self.seek_target.take() {
@@ -724,28 +758,33 @@ impl CdRom {
         }
 
         // Second response: INt2(Stat)
-        self.schedule_event(cdrom_timing::DEFAULT_FIRST, vec![self.get_status_byte()], 2);
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![self.get_status_byte()],
+            2,
+            scheduler,
+        );
     }
 
     // 0x19
-    fn cmd_test(&mut self) {
+    fn cmd_test(&mut self, scheduler: &mut Scheduler) {
         // First parameter byte contains the subcommand, only 0x20 (version) used by the BIOS
         let subcommand = self.command_args.get(0).copied().unwrap_or(0);
         match subcommand {
             0x20 => {
                 // Get cdrom BIOS date/version (yy,mm,dd,ver) and set INT3
                 let response = [0x95, 0x05, 0x16, 0xc1]; // Example response for BIOS version
-                self.schedule_event(cdrom_timing::DEFAULT_FIRST, response.to_vec(), 3);
+                self.schedule_event(cdrom_timing::DEFAULT_FIRST, response.to_vec(), 3, scheduler);
             }
             _ => {
                 eprintln!("Unrecognized CD-ROM TEST subcommand 0x{:02X}", subcommand);
-                self.schedule_event(cdrom_timing::DEFAULT_FIRST, vec![0xFF], 3); // Default response
+                self.schedule_event(cdrom_timing::DEFAULT_FIRST, vec![0xFF], 3, scheduler); // Default response
             }
         }
     }
 
     // 0x1A
-    fn cmd_getid(&mut self) {
+    fn cmd_getid(&mut self, scheduler: &mut Scheduler) {
         /*
         GetID - Command 1Ah --> INT3(stat) --> INT2/5 (stat,flags,type,atip,"SCEx")
         Drive Status           1st Response   2nd Response
@@ -762,22 +801,27 @@ impl CdRom {
         Modchip:Audio/Mode1    INT3(stat)     INT2(02h,00h, 00h,00h, 53h,43h,45h,4xh)
         */
         // Start by acknowledging with INT3 with status byte
-        self.schedule_event(cdrom_timing::GETSTAT, vec![self.get_status_byte()], 3);
+        self.schedule_event(
+            cdrom_timing::GETSTAT,
+            vec![self.get_status_byte()],
+            3,
+            scheduler,
+        );
 
         // For now, only respond with No Disk or Licensed:Mode2, depending on whether a disc is inserted
         if self.disc.is_none() {
             // No disc inserted
             let response = [0x08, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-            self.schedule_event(cdrom_timing::GETID_SECOND, response.to_vec(), 5); // INT5 for second response
+            self.schedule_event(cdrom_timing::GETID_SECOND, response.to_vec(), 5, scheduler); // INT5 for second response
         } else {
             // Disc inserted, respond with Licensed:Mode2
             let response = [0x02, 0x00, 0x20, 0x00, b'S', b'C', b'E', b'I'];
-            self.schedule_event(cdrom_timing::GETID_SECOND, response.to_vec(), 2); // INT2 for second response
+            self.schedule_event(cdrom_timing::GETID_SECOND, response.to_vec(), 2, scheduler); // INT2 for second response
         }
     }
 
     // 0x1B
-    fn cmd_reads(&mut self) {
+    fn cmd_reads(&mut self, scheduler: &mut Scheduler) {
         /*
         ReadS - Command 1Bh --> INT3(stat) --> INT1(stat) --> datablock
         Read without automatic retry. Not sure what that means... does WHAT on errors? Maybe intended for continous
@@ -785,7 +829,7 @@ impl CdRom {
         */
 
         // TODO a retry method, for now we'll just ReadS
-        self.cmd_readn();
+        self.cmd_readn(scheduler);
     }
 
     // Helpers
@@ -805,12 +849,20 @@ impl CdRom {
         }
     }
 
-    fn schedule_event(&mut self, cycles: u32, response: Vec<u8>, interrupt_code: u8) {
-        self.event_queue.push_back(CdRomEvent {
-            cycles_remaining: cycles,
-            kind: CdRomEventKind::Response(response),
-            interrupt_code,
-        });
+    fn schedule_event(
+        &mut self,
+        cycles: u64,
+        response: Vec<u8>,
+        interrupt_code: u8,
+        scheduler: &mut Scheduler,
+    ) {
+        scheduler.schedule(
+            SchedulerEvent::CdRomResponse {
+                bytes: response,
+                int_code: interrupt_code,
+            },
+            cycles,
+        );
     }
 
     fn get_status_byte(&self) -> u8 {

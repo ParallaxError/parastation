@@ -294,12 +294,7 @@ unsafe impl bytemuck::Pod for TexturedGlVertex {}
 unsafe impl bytemuck::Zeroable for TexturedGlVertex {}
 
 impl OpenGlBackend {
-    fn submit_flat(
-        &mut self,
-        verts: &[FlatGlVertex],
-        mode: u32,
-        drawing_area: &DrawingArea,
-    ) {
+    fn submit_flat(&mut self, verts: &[FlatGlVertex], mode: u32, drawing_area: &DrawingArea) {
         unsafe {
             self.gl
                 .bind_framebuffer(glow::FRAMEBUFFER, Some(self.vram_framebuffer));
@@ -534,7 +529,8 @@ impl OpenGlBackend {
             tex_y,
             semi_transparent,
             texture_params.tex_page.semi_transparency,
-            &params.texture_window, &params.drawing_area
+            &params.texture_window,
+            &params.drawing_area,
         );
     }
 
@@ -610,7 +606,8 @@ impl OpenGlBackend {
             tex_y,
             semi_transparent,
             mode.semi_transparency,
-            &params.texture_window, &params.drawing_area
+            &params.texture_window,
+            &params.drawing_area,
         );
     }
 }

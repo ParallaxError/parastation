@@ -20,6 +20,7 @@ mod interpreter;
 mod interrupt_controller;
 mod memory_map;
 mod ram;
+mod scheduler;
 mod scratchpad;
 mod system_bus;
 
@@ -28,17 +29,15 @@ pub use bios::Bios;
 pub use cpu::{Cpu, MipsRegister};
 pub use gpu::GpuBackend;
 pub use interpreter::Interpreter;
-use interrupt_controller::Interrupt;
 pub use system_bus::SystemBus;
 
-const VBLANK_CYCLES: u32 = 33867; // Number of cycles between VBlank interrupts
+const VBLANK_CYCLES: u64 = 33867; // Number of cycles between VBlank interrupts
 
 /// Top-level PS1 struct, encapsulating the entire emulator state (CPU, memory, etc.)
 pub struct Ps1<B: Backend> {
     cpu: Cpu,
     bus: SystemBus,
     backend: B,
-    vblank_timer: u32, // Counts cycles until next VBlank interrupt: VBlank every 33868 cycles
 }
 
 impl<B: Backend> Ps1<B> {
@@ -47,7 +46,6 @@ impl<B: Backend> Ps1<B> {
             cpu: Cpu::new(),
             bus: SystemBus::new(bios, gpu_backend),
             backend: instruction_backend,
-            vblank_timer: VBLANK_CYCLES,
         }
     }
 
@@ -95,13 +93,6 @@ impl<B: Backend> Ps1<B> {
     fn step(&mut self) {
         self.bus.tick(1);
         self.backend.step(&mut self.cpu, &mut self.bus);
-        self.vblank_timer = self.vblank_timer.wrapping_sub(1);
-        if self.vblank_timer == 0 {
-            self.vblank_timer = VBLANK_CYCLES; // Reset timer for next VBlank
-            self.bus
-                .interrupt_controller
-                .raise_interrupt(Interrupt::VBlank);
-        }
     }
 
     /// Run the emulator for a given number of cycles.
