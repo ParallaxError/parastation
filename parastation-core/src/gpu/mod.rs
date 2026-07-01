@@ -12,7 +12,7 @@ use std::cell::Cell;
 
 mod gpu_state;
 pub use gpu_state::Mask;
-pub use gpu_state::{DrawMode, DrawingOffset, GpuState, TextureWindow};
+pub use gpu_state::{DrawMode, DrawingArea, DrawingOffset, GpuState, TextureWindow};
 mod rendering_parameters;
 pub use rendering_parameters::*;
 pub mod backend;

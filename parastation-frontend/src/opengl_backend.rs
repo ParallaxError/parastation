@@ -198,10 +198,10 @@ impl OpenGlBackend {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertex_buffer));
 
             let stride = std::mem::size_of::<FlatGlVertex>() as i32;
-            // location 0 = position (x, y) — 2 floats at offset 0
+            // location 0 = position (x, y), 2 floats at offset 0
             gl.enable_vertex_attrib_array(0);
             gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
-            // location 1 = colour (r, g, b) — 3 floats at offset 8 (after 2 x f32)
+            // location 1 = colour (r, g, b), 3 floats at offset 8 (after two floats for position)
             gl.enable_vertex_attrib_array(1);
             gl.vertex_attrib_pointer_f32(1, 3, glow::FLOAT, false, stride, 8);
 
@@ -294,47 +294,30 @@ unsafe impl bytemuck::Pod for TexturedGlVertex {}
 unsafe impl bytemuck::Zeroable for TexturedGlVertex {}
 
 impl OpenGlBackend {
-    fn setup_blend(&self, semi_transparent: bool, mode: u8) {
-        unsafe {
-            if !semi_transparent {
-                self.gl.disable(glow::BLEND);
-                return;
-            }
-            self.gl.enable(glow::BLEND);
-            match mode {
-                0 => {
-                    // 0.5*B + 0.5*F — but respect per-pixel alpha
-                    self.gl.blend_equation(glow::FUNC_ADD);
-                    self.gl
-                        .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-                }
-                1 => {
-                    self.gl.blend_equation(glow::FUNC_ADD);
-                    self.gl.blend_func(glow::SRC_ALPHA, glow::ONE);
-                }
-                2 => {
-                    self.gl.blend_equation(glow::FUNC_REVERSE_SUBTRACT);
-                    self.gl.blend_func(glow::SRC_ALPHA, glow::ONE);
-                }
-                3 => {
-                    self.gl.blend_equation(glow::FUNC_ADD);
-                    self.gl.blend_func(glow::SRC_ALPHA, glow::ONE);
-                }
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    fn submit_flat(&mut self, verts: &[FlatGlVertex], mode: u32) {
+    fn submit_flat(
+        &mut self,
+        verts: &[FlatGlVertex],
+        mode: u32,
+        drawing_area: &DrawingArea,
+    ) {
         unsafe {
             self.gl
                 .bind_framebuffer(glow::FRAMEBUFFER, Some(self.vram_framebuffer));
             self.gl.viewport(0, 0, 1024, 512);
 
+            // Scissor clip to drawing area
+            self.gl.enable(glow::SCISSOR_TEST);
+            self.gl.scissor(
+                drawing_area.x1 as i32,
+                drawing_area.y1 as i32,
+                (drawing_area.x2 - drawing_area.x1) as i32,
+                (drawing_area.y2 - drawing_area.y1) as i32,
+            );
+
             self.gl.use_program(Some(self.flat_program));
             self.gl.bind_vertex_array(Some(self.vertex_array));
 
-            // upload vertices — VAO already knows the layout
+            // Upload vertex data to GPU
             self.gl
                 .bind_buffer(glow::ARRAY_BUFFER, Some(self.vertex_buffer));
             let bytes = bytemuck::cast_slice(verts);
@@ -365,6 +348,7 @@ impl OpenGlBackend {
                 FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, colour),
             ],
             glow::TRIANGLES,
+            &params.drawing_area,
         );
     }
 
@@ -386,6 +370,7 @@ impl OpenGlBackend {
                 FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, v2.colour),
             ],
             glow::TRIANGLES,
+            &params.drawing_area,
         );
     }
 
@@ -413,6 +398,7 @@ impl OpenGlBackend {
                 FlatGlVertex::new(v3.vertex.x + ox, v3.vertex.y + oy, colour),
             ],
             glow::TRIANGLES,
+            &params.drawing_area,
         );
     }
 
@@ -426,11 +412,22 @@ impl OpenGlBackend {
         semi_transparent: bool,
         semi_transparency_mode: u8,
         texture_window: &TextureWindow,
+        drawing_area: &DrawingArea,
     ) {
         unsafe {
             self.gl
                 .bind_framebuffer(glow::FRAMEBUFFER, Some(self.vram_framebuffer));
             self.gl.viewport(0, 0, 1024, 512);
+
+            // Scissor clip to drawing area
+            self.gl.enable(glow::SCISSOR_TEST);
+            self.gl.scissor(
+                drawing_area.x1 as i32,
+                drawing_area.y1 as i32,
+                (drawing_area.x2 - drawing_area.x1) as i32,
+                (drawing_area.y2 - drawing_area.y1) as i32,
+            );
+
             self.gl.use_program(Some(self.textured_program));
 
             self.gl.active_texture(glow::TEXTURE0);
@@ -537,7 +534,7 @@ impl OpenGlBackend {
             tex_y,
             semi_transparent,
             texture_params.tex_page.semi_transparency,
-            &params.texture_window,
+            &params.texture_window, &params.drawing_area
         );
     }
 
@@ -613,7 +610,7 @@ impl OpenGlBackend {
             tex_y,
             semi_transparent,
             mode.semi_transparency,
-            &params.texture_window,
+            &params.texture_window, &params.drawing_area
         );
     }
 }
@@ -735,7 +732,14 @@ impl GpuBackend for OpenGlBackend {
 
         let flat = |x, y| FlatGlVertex::new(x, y, colour);
 
-        // No drawing offset, no clip, no semi-transparency — fill_rect bypasses all of that
+        // No drawing offset, no clip, no semi-transparency
+        // Also no drawing area, so need to just submit a drawing area that covers the whole VRAM
+        let drawing_area = DrawingArea {
+            x1: 0,
+            y1: 0,
+            x2: 1024,
+            y2: 512,
+        };
         self.submit_flat(
             &[
                 flat(x0, y0),
@@ -746,6 +750,7 @@ impl GpuBackend for OpenGlBackend {
                 flat(x1, y1),
             ],
             glow::TRIANGLES,
+            &drawing_area,
         );
     }
 
@@ -786,6 +791,9 @@ impl GpuBackend for OpenGlBackend {
 
             // TODO handle mask
             let _ = mask;
+            if mask.check_mask_before_draw || mask.set_mask_while_drawing {
+                panic!("copy_rect: mask check not implemented");
+            }
 
             check_gl_errors(&self.gl, "copy_rect");
         }
@@ -916,6 +924,9 @@ impl GpuBackend for OpenGlBackend {
         // let h = 512;
         unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+
+            // Disable scissor for present
+            self.gl.disable(glow::SCISSOR_TEST);
 
             // Get actual window size
             let win_w = self.window_width as f32;
