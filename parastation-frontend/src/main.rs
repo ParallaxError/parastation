@@ -1,11 +1,14 @@
 mod dummy_gpu_backend;
 mod opengl_backend;
 use opengl_backend::OpenGlBackend;
+mod keyboard_input_provider;
+use keyboard_input_provider::*;
 
 use std::env;
 use std::time::{Duration, Instant};
 
 use parastation_core::bios::Bios;
+use parastation_core::sio0::InputProvider;
 use parastation_core::{Interpreter, Ps1};
 
 use glutin::config::ConfigTemplateBuilder;
@@ -16,9 +19,17 @@ use glutin::surface::{SurfaceAttributesBuilder, WindowSurface};
 use glutin_winit::DisplayBuilder;
 use raw_window_handle::HasRawWindowHandle;
 use winit::dpi::LogicalSize;
-use winit::event::{Event, WindowEvent};
+use winit::event::{Event, WindowEvent, ElementState};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
+use winit::keyboard::PhysicalKey;
+
+pub struct DummyInputProvider;
+impl InputProvider for DummyInputProvider {
+    fn get_joypad_state(&self) -> u16 {
+        0xFFFF // All buttons released
+    }
+}
 
 fn main() {
     unsafe {
@@ -88,19 +99,29 @@ fn main() {
         })
     };
 
+    // Create the controller for the keyboard input provider
+    let keyboard_state = KeyboardState::new();
+    let keyboard_input_provider = KeyboardInputProvider::new(keyboard_state.clone());
+
     // Finally, create the backend
     let backend = Box::new(OpenGlBackend::new(gl));
-    let mut ps1 = Ps1::new(bios, Interpreter::new(), backend);
+    let mut ps1 = Ps1::new(
+        bios,
+        Interpreter::new(),
+        backend,
+        Box::new(keyboard_input_provider),
+        Box::new(DummyInputProvider),
+    );
 
     // Insert disk
-    ps1.insert_cdrom_disc("games\\Mortal Kombat II (Japan)\\Mortal Kombat II (Japan).cue");
+    ps1.insert_cdrom_disc(r"games\Ridge Racer\Ridge Racer.cue");
     // ps1.insert_cdrom_disc("tests\\nolibgs_hello_worlds\\hello_cd\\hello_cd.cue");
 
     // Run some bios
     ps1.run_until_pc(0x80030000);
 
     // Load test exe
-    // let exe_data = std::fs::read("tests/nolibgs_hello_worlds/hello_cd/hello_cd.ps-exe").unwrap_or_else(|e| {
+    // let exe_data = std::fs::read("tests/psxtest_cpu.exe").unwrap_or_else(|e| {
     //     eprintln!("Failed to load psxtest_cpu.exe: {e}");
     //     std::process::exit(1);
     // });
@@ -128,6 +149,17 @@ fn main() {
                     event: WindowEvent::CloseRequested,
                     ..
                 } => elwt.exit(),
+                Event::WindowEvent {
+                    event: WindowEvent::KeyboardInput { event: key_event, .. },
+                    ..
+                } => {
+                    if let PhysicalKey::Code(key_code) = key_event.physical_key {
+                        match key_event.state {
+                            ElementState::Pressed => keyboard_state.key_pressed(key_code),
+                            ElementState::Released => keyboard_state.key_released(key_code),
+                        }
+                    }
+                },
                 _ => (),
             }
         })

@@ -928,6 +928,7 @@ impl Interpreter {
 
     fn op_cop2(&mut self, _command: u32, _cpu: &mut Cpu) {
         // unimplemented!("Coprocessor 2 is not implemented");
+        println!("cop2!");
     }
 
     fn op_lwc0(

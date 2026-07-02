@@ -55,6 +55,10 @@ pub const MEMORY_CONTROL_1: Range = Range {
     start: 0x1F80_1000,
     end: 0x1F80_1024,
 };
+pub const SIO0_REGISTERS: Range = Range {
+    start: 0x1F80_1040,
+    end: 0x1F80_1050,
+};
 pub const INTERRUPT_CONTROL: Range = Range {
     start: 0x1F80_1070,
     end: 0x1F80_1078,

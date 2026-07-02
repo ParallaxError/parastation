@@ -17,6 +17,7 @@ pub enum SchedulerEvent {
     VBlank,
     CdRomResponse { bytes: Vec<u8>, int_code: u8 },
     CdRomSectorRead,
+    SioResponse { byte: u8, dsr: bool },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

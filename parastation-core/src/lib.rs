@@ -22,14 +22,16 @@ mod memory_map;
 mod ram;
 mod scheduler;
 mod scratchpad;
+pub mod sio0;
 mod system_bus;
 
 pub use backend::Backend;
 pub use bios::Bios;
-pub use cpu::{Cpu, MipsRegister};
+use cpu::{Cpu, MipsRegister};
 pub use gpu::GpuBackend;
 pub use interpreter::Interpreter;
-pub use system_bus::SystemBus;
+pub use sio0::InputProvider;
+use system_bus::SystemBus;
 
 const VBLANK_CYCLES: u64 = 33867; // Number of cycles between VBlank interrupts
 
@@ -41,10 +43,16 @@ pub struct Ps1<B: Backend> {
 }
 
 impl<B: Backend> Ps1<B> {
-    pub fn new(bios: Bios, instruction_backend: B, gpu_backend: Box<dyn GpuBackend>) -> Self {
+    pub fn new(
+        bios: Bios,
+        instruction_backend: B,
+        gpu_backend: Box<dyn GpuBackend>,
+        joy1: Box<dyn InputProvider>,
+        joy2: Box<dyn InputProvider>,
+    ) -> Self {
         Self {
             cpu: Cpu::new(),
-            bus: SystemBus::new(bios, gpu_backend),
+            bus: SystemBus::new(bios, gpu_backend, joy1, joy2),
             backend: instruction_backend,
         }
     }

@@ -22,6 +22,7 @@ use crate::memory_map::*;
 use crate::ram::Ram;
 use crate::scheduler::{Scheduler, SchedulerEvent};
 use crate::scratchpad::Scratchpad;
+use crate::sio0::{InputProvider, SioController};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 enum AccessWidth {
@@ -43,6 +44,7 @@ pub struct SystemBus {
     bios: Bios,
     ram: Ram,
     scratchpad: Scratchpad,
+    pub sio: SioController,
     pub interrupt_controller: InterruptController,
     dma: DmaController,
     pub gpu: Gpu,
@@ -50,7 +52,12 @@ pub struct SystemBus {
 }
 
 impl SystemBus {
-    pub fn new(bios: Bios, gpu_backend: Box<dyn GpuBackend>) -> Self {
+    pub fn new(
+        bios: Bios,
+        gpu_backend: Box<dyn GpuBackend>,
+        joy1: Box<dyn InputProvider>,
+        joy2: Box<dyn InputProvider>,
+    ) -> Self {
         // Create scheduler and schedule an initial VBlank interrupt to occur
         let mut scheduler = Scheduler::new();
         scheduler.schedule(SchedulerEvent::VBlank, VBLANK_CYCLES);
@@ -60,6 +67,7 @@ impl SystemBus {
             bios,
             ram: Ram::new(),
             scratchpad: Scratchpad::new(),
+            sio: SioController::new(joy1, joy2),
             interrupt_controller: InterruptController::new(),
             dma: DmaController::new(),
             gpu: Gpu::new(gpu_backend),
@@ -111,11 +119,14 @@ macro_rules! bus_read {
         if let Some(offset) = SCRATCHPAD.contains(addr) {
             return $self.scratchpad.$method(offset);
         }
-        if let Some(offset) = CDROM_REGISTERS.contains(addr) {
-            return $self.cd_rom.read_register(offset) as _;
-        }
         if (addr >= 0x1F80_1040 && addr < 0x1F80_105E) {
             return 0xFFFF_FFFFu32 as _;
+        }
+        if let Some(offset) = SIO0_REGISTERS.contains(addr) {
+            return $self.sio.read_register(offset) as _;
+        }
+        if let Some(offset) = CDROM_REGISTERS.contains(addr) {
+            return $self.cd_rom.read_register(offset) as _;
         }
 
         let word = $self.read_hardware(addr);
@@ -137,6 +148,9 @@ macro_rules! bus_write {
         }
         if let Some(offset) = SCRATCHPAD.contains(addr) {
             return $self.scratchpad.$method(offset, $value);
+        }
+        if let Some(offset) = SIO0_REGISTERS.contains(addr) {
+            return $self.sio.write_register(offset, $value as u32, &mut $self.scheduler);
         }
         if let Some(offset) = CDROM_REGISTERS.contains(addr) {
             return $self
@@ -452,6 +466,9 @@ impl SystemBus {
                         &mut self.scheduler,
                         &mut self.interrupt_controller,
                     );
+                },
+                SchedulerEvent::SioResponse { byte, dsr } => {
+                    self.sio.handle_event(byte, dsr, &mut self.interrupt_controller);
                 }
                 _ => {
                     eprintln!("Unhandled scheduler event: {:?}", event);
