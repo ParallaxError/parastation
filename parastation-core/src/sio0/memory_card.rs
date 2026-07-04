@@ -250,7 +250,7 @@ impl MemoryCard {
                     }
                 }
             }
-            _ => unreachable!(),
+            _ => unreachable!(), // TODO run shell and ull see that it hits this for some reason
         }
     }
 

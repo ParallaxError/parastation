@@ -268,6 +268,7 @@ impl Gpu {
         }
 
         self.backend.vram_read_begin(x, y, w, h);
+        self.gp0_read_mode = Some(Gp0ReadMode::Vram);
     }
 
     fn read_vram(&mut self) -> u32 {

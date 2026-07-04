@@ -15,6 +15,7 @@
 use crate::VBLANK_CYCLES;
 use crate::bios::Bios;
 use crate::cd_rom::CdRom;
+use crate::timers::Timers;
 use crate::dma::{DmaController, DmaTransfer};
 use crate::gpu::{Gpu, GpuBackend};
 use crate::interrupt_controller::{Interrupt, InterruptController};
@@ -49,6 +50,7 @@ pub struct SystemBus {
     dma: DmaController,
     pub gpu: Gpu,
     cd_rom: CdRom,
+    timers: Timers,
 }
 
 impl SystemBus {
@@ -72,6 +74,7 @@ impl SystemBus {
             dma: DmaController::new(),
             gpu: Gpu::new(gpu_backend),
             cd_rom: CdRom::new(),
+            timers: Timers::new(),
         }
     }
 }
@@ -111,16 +114,13 @@ macro_rules! bus_read {
         let addr = mask_region($addr);
 
         if let Some(offset) = RAM.contains(addr) {
-            return $self.ram.$method(offset);
+            return $self.ram.$method(offset & 0x1F_FFFF);
         }
         if let Some(offset) = BIOS.contains(addr) {
             return $self.bios.$method(offset);
         }
         if let Some(offset) = SCRATCHPAD.contains(addr) {
             return $self.scratchpad.$method(offset);
-        }
-        if (addr >= 0x1F80_1040 && addr < 0x1F80_105E) {
-            return 0xFFFF_FFFFu32 as _;
         }
         if let Some(offset) = SIO0_REGISTERS.contains(addr) {
             return $self.sio.read_register(offset) as _;
@@ -144,7 +144,7 @@ macro_rules! bus_write {
         let addr = mask_region($addr);
 
         if let Some(offset) = RAM.contains(addr) {
-            return $self.ram.$method(offset, $value);
+            return $self.ram.$method(offset & 0x1F_FFFF, $value);
         }
         if let Some(offset) = SCRATCHPAD.contains(addr) {
             return $self.scratchpad.$method(offset, $value);
@@ -158,10 +158,6 @@ macro_rules! bus_write {
                 .write_register(offset, $value as u8, &mut $self.scheduler);
         }
         if let Some(_) = EXP2.contains(addr) {
-            return;
-        }
-
-        if (addr >= 0x1F80_1040 && addr < 0x1F80_105E) {
             return;
         }
         $self.write_hardware(addr, $value as u32, $width);
@@ -185,9 +181,11 @@ impl SystemBus {
         if let Some(offset) = DMA_REGISTERS.contains(addr) {
             return self.dma.read_register(offset);
         }
-        if let Some(_offset) = TIMERS.contains(addr) {
-            return 0xFFFF_FFFF;
-        } // TODO timers
+        if let Some(offset) = TIMERS.contains(addr) {
+            let timer = (offset / 0x10) as usize;
+            let timer_offset = offset % 0x10;
+            return self.timers.read_register(timer, timer_offset);
+        }
         if let Some(offset) = GPU_REGISTERS.contains(addr) {
             return self.read_gpu_register(offset);
         }
@@ -235,9 +233,11 @@ impl SystemBus {
             }
             return;
         }
-        if let Some(_offset) = TIMERS.contains(addr) {
-            return;
-        } // TODO timers
+        if let Some(offset) = TIMERS.contains(addr) {
+            let timer = (offset/ 0x10) as usize;
+            let timer_offset = offset % 0x10;
+            return self.timers.write_register(timer, timer_offset, value as u16);
+        }
         if let Some(offset) = GPU_REGISTERS.contains(addr) {
             return self.write_gpu_register(offset, value);
         }
@@ -396,9 +396,7 @@ impl SystemBus {
     fn dma_gpu_vram_read(&mut self, base_addr: u32, word_count: u32) {
         let mut addr = base_addr & 0x001F_FFFC;
         for _ in 0..word_count {
-            // TODO should be an Option
             let data = self.gpu.read_register(0); // Read from GPUREAD
-            // let data = 0x12341234u32;
             self.ram.write32(addr, data);
             addr = addr.wrapping_add(4); // Wrap around the 2MB RAM size
         }
@@ -443,6 +441,8 @@ impl SystemBus {
 impl SystemBus {
     /// Tick the system bus, advancing the scheduler and processing any pending peripheral events
     pub fn tick(&mut self, cycles: u32) {
+        // TODO why u32 and u64 mix?
+        self.timers.tick(cycles as u64, &mut self.interrupt_controller);
         let to_service = self.scheduler.advance(cycles);
 
         // Process any events that require servicing, hopefully slippage was minimal

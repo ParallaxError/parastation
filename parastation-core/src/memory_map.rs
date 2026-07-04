@@ -36,7 +36,7 @@ impl Range {
 // 2 MB of RAM, mirrored every 2 MB until 0x1FFF_FFFF
 pub const RAM: Range = Range {
     start: 0x0000_0000,
-    end: 0x0020_0000,
+    end: 0x0080_0000,
 };
 
 // Expansion region 1 (ROM/RAM), 8 MB

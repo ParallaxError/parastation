@@ -13,6 +13,7 @@
 mod backend;
 pub mod bios;
 mod cd_rom;
+mod timers;
 mod cpu;
 mod dma;
 pub mod gpu;
@@ -33,7 +34,7 @@ pub use interpreter::Interpreter;
 pub use sio0::InputProvider;
 use system_bus::SystemBus;
 
-const VBLANK_CYCLES: u64 = 33867; // Number of cycles between VBlank interrupts
+const VBLANK_CYCLES: u64 = 564480; // Number of cycles between VBlank interrupts
 
 /// Top-level PS1 struct, encapsulating the entire emulator state (CPU, memory, etc.)
 pub struct Ps1<B: Backend> {
@@ -99,7 +100,7 @@ impl<B: Backend> Ps1<B> {
     }
 
     fn step(&mut self) {
-        self.bus.tick(1);
+        self.bus.tick(2);
         self.backend.step(&mut self.cpu, &mut self.bus);
     }
 

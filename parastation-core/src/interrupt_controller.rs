@@ -7,6 +7,7 @@
  */
 
 /// A hardware interrupt type, corresponding to a bit in the I_STAT and I_MASK registers of the interrupt
+#[derive(Clone, Copy, Debug)]
 pub enum Interrupt {
     VBlank = 0x0,     // Vertical blank interrupt
     GPU = 0x1,        // GPU interrupt

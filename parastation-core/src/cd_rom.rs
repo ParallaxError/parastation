@@ -561,6 +561,7 @@ impl CdRom {
             0x01 => self.cmd_getstat(scheduler),
             0x02 => self.cmd_setloc(scheduler),
             0x06 => self.cmd_readn(scheduler),
+            0x08 => self.cmd_stop(scheduler),
             0x09 => self.cmd_pause(scheduler),
             0x0A => self.cmd_init(scheduler),
             0x0C => self.cmd_demute(scheduler),
@@ -600,6 +601,10 @@ impl CdRom {
         let ss = bcd_to_decimal(self.command_args.get(1).copied().unwrap_or(0));
         let sect = bcd_to_decimal(self.command_args.get(2).copied().unwrap_or(0));
 
+        self.reading = false;
+        // Cancel any pending sector read events since we are seeking to a new location
+        scheduler.cancel(|event| matches!(event, SchedulerEvent::CdRomSectorRead));
+
         self.schedule_event(
             cdrom_timing::DEFAULT_FIRST,
             vec![self.get_status_byte()],
@@ -634,6 +639,45 @@ impl CdRom {
 
         self.reading = true;
         self.schedule_sector_read(scheduler);
+    }
+
+    // 0x09
+    fn cmd_stop(&mut self, scheduler: &mut Scheduler) {
+        /*
+        Stop - Command 08h --> INT3(stat) --> INT2(stat)
+        Stops motor with magnetic brakes (stops within a second or so) (unlike power-off where it'd keep spinning for
+        about 10 seconds), and moves the drive head to the begin of the first track. Official way to restart is
+        command 0Ah, but almost any command will restart it.
+        The first response returns the current status (this already with bit5 cleared), the second response returns
+        the new status (with bit1 cleared).
+        */
+
+        let stop_time = if self.reading || self.seek_target.is_some() {
+            if self.mode & 0x80 != 0 {
+                cdrom_timing::STOP_SECOND_2X
+            } else {
+                cdrom_timing::STOP_SECOND_1X
+            }
+        } else {
+            cdrom_timing::STOP_SECOND_ALREADY_STOPPED
+        };
+        
+        // Should give the current status before stopping but with bit5 already cleared
+        self.reading = false;
+        let status_before_stop = self.get_status_byte();
+
+        self.seek_target = None;
+
+        // Cancel any pending sector read events
+        scheduler.cancel(|event| matches!(event, SchedulerEvent::CdRomSectorRead));
+
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![status_before_stop],
+            3,
+            scheduler,
+        );
+        self.schedule_event(stop_time, vec![self.get_status_byte()], 2, scheduler);
     }
 
     // 0x09

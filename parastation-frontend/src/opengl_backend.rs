@@ -915,10 +915,10 @@ impl GpuBackend for OpenGlBackend {
     }
 
     fn present(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16) {
-        let vram_x = 0;
-        let vram_y = 0;
-        let w = 1024;
-        let h = 512;
+        // let vram_x = 0;
+        // let vram_y = 0;
+        // let w = 1024;
+        // let h = 512;
         unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 

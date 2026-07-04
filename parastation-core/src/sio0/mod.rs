@@ -177,7 +177,7 @@ impl SioController {
             ActiveDevice::None => (0xFF, false),
         };
 
-        let delay = (8 * self.baud as u64).max(1);
+        let delay = (16 * self.baud as u64).max(1);
         scheduler.schedule(SchedulerEvent::SioResponse { byte: response, dsr }, delay);
 
         if !dsr {
