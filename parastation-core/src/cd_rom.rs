@@ -661,7 +661,7 @@ impl CdRom {
         } else {
             cdrom_timing::STOP_SECOND_ALREADY_STOPPED
         };
-        
+
         // Should give the current status before stopping but with bit5 already cleared
         self.reading = false;
         let status_before_stop = self.get_status_byte();

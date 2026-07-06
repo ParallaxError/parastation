@@ -15,7 +15,6 @@
 use crate::VBLANK_CYCLES;
 use crate::bios::Bios;
 use crate::cd_rom::CdRom;
-use crate::timers::Timers;
 use crate::dma::{DmaController, DmaTransfer};
 use crate::gpu::{Gpu, GpuBackend};
 use crate::interrupt_controller::{Interrupt, InterruptController};
@@ -24,6 +23,7 @@ use crate::ram::Ram;
 use crate::scheduler::{Scheduler, SchedulerEvent};
 use crate::scratchpad::Scratchpad;
 use crate::sio0::{InputProvider, SioController};
+use crate::timers::Timers;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 enum AccessWidth {
@@ -150,7 +150,9 @@ macro_rules! bus_write {
             return $self.scratchpad.$method(offset, $value);
         }
         if let Some(offset) = SIO0_REGISTERS.contains(addr) {
-            return $self.sio.write_register(offset, $value as u32, &mut $self.scheduler);
+            return $self
+                .sio
+                .write_register(offset, $value as u32, &mut $self.scheduler);
         }
         if let Some(offset) = CDROM_REGISTERS.contains(addr) {
             return $self
@@ -234,9 +236,11 @@ impl SystemBus {
             return;
         }
         if let Some(offset) = TIMERS.contains(addr) {
-            let timer = (offset/ 0x10) as usize;
+            let timer = (offset / 0x10) as usize;
             let timer_offset = offset % 0x10;
-            return self.timers.write_register(timer, timer_offset, value as u16);
+            return self
+                .timers
+                .write_register(timer, timer_offset, value as u16);
         }
         if let Some(offset) = GPU_REGISTERS.contains(addr) {
             return self.write_gpu_register(offset, value);
@@ -442,7 +446,8 @@ impl SystemBus {
     /// Tick the system bus, advancing the scheduler and processing any pending peripheral events
     pub fn tick(&mut self, cycles: u32) {
         // TODO why u32 and u64 mix?
-        self.timers.tick(cycles as u64, &mut self.interrupt_controller);
+        self.timers
+            .tick(cycles as u64, &mut self.interrupt_controller);
         let to_service = self.scheduler.advance(cycles);
 
         // Process any events that require servicing, hopefully slippage was minimal
@@ -466,9 +471,10 @@ impl SystemBus {
                         &mut self.scheduler,
                         &mut self.interrupt_controller,
                     );
-                },
+                }
                 SchedulerEvent::SioResponse { byte, dsr } => {
-                    self.sio.handle_event(byte, dsr, &mut self.interrupt_controller);
+                    self.sio
+                        .handle_event(byte, dsr, &mut self.interrupt_controller);
                 }
                 _ => {
                     eprintln!("Unhandled scheduler event: {:?}", event);

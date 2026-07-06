@@ -13,7 +13,6 @@
 mod backend;
 pub mod bios;
 mod cd_rom;
-mod timers;
 mod cpu;
 mod dma;
 pub mod gpu;
@@ -25,6 +24,7 @@ mod scheduler;
 mod scratchpad;
 pub mod sio0;
 mod system_bus;
+mod timers;
 
 pub use backend::Backend;
 pub use bios::Bios;

@@ -14,8 +14,8 @@ mod sio_device;
 use sio_device::SioDevice;
 
 // Imports
-use crate::scheduler::{Scheduler, SchedulerEvent};
 use crate::interrupt_controller::{Interrupt, InterruptController};
+use crate::scheduler::{Scheduler, SchedulerEvent};
 
 enum ActiveDevice {
     None,
@@ -80,12 +80,7 @@ impl SioController {
         }
     }
 
-    pub fn write_register(
-        &mut self,
-        offset: u32,
-        value: u32,
-        scheduler: &mut Scheduler,
-    ) {
+    pub fn write_register(&mut self, offset: u32, value: u32, scheduler: &mut Scheduler) {
         match offset {
             0x0 => self.write_data(value as u8, scheduler),
             0x4 => {
@@ -161,7 +156,6 @@ impl SioController {
                     }
                 }
                 _ => ActiveDevice::None,
-
             };
 
             if matches!(self.active_device, ActiveDevice::None) {
@@ -178,7 +172,13 @@ impl SioController {
         };
 
         let delay = (16 * self.baud as u64).max(1);
-        scheduler.schedule(SchedulerEvent::SioResponse { byte: response, dsr }, delay);
+        scheduler.schedule(
+            SchedulerEvent::SioResponse {
+                byte: response,
+                dsr,
+            },
+            delay,
+        );
 
         if !dsr {
             self.active_device = ActiveDevice::None;
@@ -218,7 +218,12 @@ impl SioController {
         self.baud = value;
     }
 
-    pub fn handle_event(&mut self, byte: u8, dsr: bool, interrupt_controller: &mut InterruptController) {
+    pub fn handle_event(
+        &mut self,
+        byte: u8,
+        dsr: bool,
+        interrupt_controller: &mut InterruptController,
+    ) {
         self.rx_data = byte;
         self.stat |= 1 << 1; // RXRDY always, response is always deliverable
         if dsr {

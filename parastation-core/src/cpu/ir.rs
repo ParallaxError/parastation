@@ -330,12 +330,12 @@ pub enum IrOp {
         command: u32,
     },
     Lwc2 {
-        dst: MipsRegister,
+        dst: GteRegister,
         base: MipsRegister,
         offset: i16,
     },
     Swc2 {
-        src: MipsRegister,
+        src: GteRegister,
         base: MipsRegister,
         offset: i16,
     },
@@ -561,7 +561,7 @@ impl IrOp {
             },
             // LWC2
             0x32 => Self::Lwc2 {
-                dst: Self::rt(raw),
+                dst: GteRegister(Self::rt(raw).0),
                 base: Self::rs(raw),
                 offset: Self::imm16(raw) as i16,
             },
@@ -573,7 +573,7 @@ impl IrOp {
             },
             // SWC2
             0x3A => Self::Swc2 {
-                src: Self::rt(raw),
+                src: GteRegister(Self::rt(raw).0),
                 base: Self::rs(raw),
                 offset: Self::imm16(raw) as i16,
             },
@@ -761,7 +761,7 @@ impl IrOp {
                 dst: Self::rt(raw),
                 cop_reg: Cop0Register(Self::rd_raw(raw)),
             },
-            // CFC0 - not on PS1 but handle gracefully
+            // CFC0 - not on PS1
             0x02 => {
                 eprintln!("CFC0 not supported on PS1");
                 IrOp::Unimplemented(raw)

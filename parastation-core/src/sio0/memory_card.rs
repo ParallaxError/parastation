@@ -13,7 +13,7 @@ use crate::sio0::sio_device::SioDevice;
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum MemCardCommand {
     AwaitingAddress, // Waiting for the address byte to be selected
-    Idle,  // No command in progress
+    Idle,            // No command in progress
     Read,  // 0x52: Reads 128 bytes from the current frame address and sends them to the PS1
     Write, // 0x57: Writes 128 bytes to the current frame address from the PS1
     GetId, // 0x53: Sends the memory card ID to the PS1
@@ -119,7 +119,7 @@ pub struct MemoryCard {
     command_state: MemCardCommandState,
     selected: bool,
 
-    checksum: u8,    // XOR checksum accumulated during transfer
+    checksum: u8,                // XOR checksum accumulated during transfer
     sector_number: u16,          // Current sector being read/written
     sector_buffer: [u8; 128],    // Buffer for the current sector being read/written
     sector_buffer_cursor: usize, // Cursor for the current position in the sector buffer
@@ -448,7 +448,7 @@ impl SioDevice for MemoryCard {
                 } else {
                     (0xFF, false)
                 }
-            },
+            }
             MemCardCommand::Idle => match byte {
                 0x52 => {
                     self.command = MemCardCommand::Read;

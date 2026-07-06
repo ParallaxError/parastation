@@ -33,7 +33,7 @@ impl RootCounter {
         self.current
     }
 
-    fn read_mode(&mut self) -> u16 { 
+    fn read_mode(&mut self) -> u16 {
         // TODO reading should ack mode
         self.mode
     }
@@ -62,8 +62,7 @@ impl RootCounter {
         let start = self.current as u32;
         let end = start + step as u32;
 
-        let hit_target = (start..=end).contains(&(self.target as u32))
-            && self.target != 0;
+        let hit_target = (start..=end).contains(&(self.target as u32)) && self.target != 0;
         let hit_ffff = end > 0xFFFF;
 
         (end as u16, hit_target, hit_ffff)
@@ -78,7 +77,13 @@ impl RootCounter {
         }
     }
 
-    fn tick(&mut self, cycles: u64, timer_index: usize, interrupt: Interrupt, interrupt_controller: &mut InterruptController) {
+    fn tick(
+        &mut self,
+        cycles: u64,
+        timer_index: usize,
+        interrupt: Interrupt,
+        interrupt_controller: &mut InterruptController,
+    ) {
         // Check if we should send an IRQ when reaching target, max value, and reset on target
         let irq_on_target = self.mode & (1 << 4) != 0;
         let irq_on_ffff = self.mode & (1 << 5) != 0;
@@ -152,7 +157,9 @@ impl Timers {
             0 => counter.write_current(value),
             4 => counter.write_mode(value),
             8 => counter.write_target(value),
-            _ => eprintln!("Write to invalid timer register offset {offset:#x} for timer {timer} with value {value:#x}"),
+            _ => eprintln!(
+                "Write to invalid timer register offset {offset:#x} for timer {timer} with value {value:#x}"
+            ),
         }
     }
 

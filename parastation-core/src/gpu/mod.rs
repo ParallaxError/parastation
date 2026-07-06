@@ -207,6 +207,7 @@ impl Gpu {
             Gp0Command::ClearCache => self.backend.clear_cache(),
             Gp0Command::FillRect => self.fill_rect(),
 
+            Gp0Command::MonochromeTri => self.draw_monochrome_tri(),
             Gp0Command::MonochromeQuad => self.draw_monochrome_quad(),
             Gp0Command::TexturedTri => self.draw_textured_tri(),
             Gp0Command::TexturedQuad => self.draw_textured_quad(),
@@ -410,6 +411,41 @@ impl Gpu {
             semi_transparency: self.state.draw_mode.semi_transparency,
             texture_window: self.state.texture_window.clone(),
         }
+    }
+
+    fn draw_monochrome_tri(&mut self) {
+        /*
+        GP0(20h) - Monochrome three-point polygon, opaque
+        GP0(22h) - Monochrome three-point polygon, semi-transparent
+        1st  Color+Command     (CcBbGgRrh)
+        2nd  Vertex1           (YyyyXxxxh)
+        3rd  Vertex2           (YyyyXxxxh)
+        4th  Vertex3           (YyyyXxxxh)
+        */
+
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour = Colour::from_word(self.gp0_buffer[0]);
+        let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
+        let vertex2 = Vertex::from_word(self.gp0_buffer[2]);
+        let vertex3 = Vertex::from_word(self.gp0_buffer[3]);
+
+        let semi_transparent = match cmd {
+            0x20 => false,
+            0x22 => true,
+            _ => unreachable!(),
+        };
+
+        let tri = Polygon::Monochrome {
+            colour,
+            vertices: PolygonVertices::Tri(
+                FlatVertex { vertex: vertex1 },
+                FlatVertex { vertex: vertex2 },
+                FlatVertex { vertex: vertex3 },
+            ),
+            semi_transparent: semi_transparent,
+        };
+
+        self.backend.draw_polygon(&tri, &self.get_draw_params());
     }
 
     fn draw_monochrome_quad(&mut self) {

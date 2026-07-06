@@ -19,10 +19,10 @@ use glutin::surface::{SurfaceAttributesBuilder, WindowSurface};
 use glutin_winit::DisplayBuilder;
 use raw_window_handle::HasRawWindowHandle;
 use winit::dpi::LogicalSize;
-use winit::event::{Event, WindowEvent, ElementState};
+use winit::event::{ElementState, Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::WindowBuilder;
 use winit::keyboard::PhysicalKey;
+use winit::window::WindowBuilder;
 
 pub struct DummyInputProvider;
 impl InputProvider for DummyInputProvider {
@@ -121,11 +121,11 @@ fn main() {
     ps1.run_until_pc(0x80030000);
 
     // Load test exe
-    // let exe_data = std::fs::read("tests/psxtest_cpu.exe").unwrap_or_else(|e| {
-    //     eprintln!("Failed to load psxtest_cpu.exe: {e}");
-    //     std::process::exit(1);
-    // });
-    // ps1.load_exe(&exe_data);
+    let exe_data = std::fs::read("tests/test-all.exe").unwrap_or_else(|e| {
+        eprintln!("Failed to load psxtest_cpu.exe: {e}");
+        std::process::exit(1);
+    });
+    ps1.load_exe(&exe_data);
 
     // Only call display at a set FPS
     let frame_duration = Duration::from_secs_f64(1.0 / 60.0);
@@ -150,7 +150,10 @@ fn main() {
                     ..
                 } => elwt.exit(),
                 Event::WindowEvent {
-                    event: WindowEvent::KeyboardInput { event: key_event, .. },
+                    event:
+                        WindowEvent::KeyboardInput {
+                            event: key_event, ..
+                        },
                     ..
                 } => {
                     if let PhysicalKey::Code(key_code) = key_event.physical_key {
@@ -159,7 +162,7 @@ fn main() {
                             ElementState::Released => keyboard_state.key_released(key_code),
                         }
                     }
-                },
+                }
                 _ => (),
             }
         })

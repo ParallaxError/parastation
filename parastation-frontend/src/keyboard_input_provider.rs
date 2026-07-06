@@ -6,9 +6,9 @@
  * -----
  */
 
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
- 
+use std::sync::atomic::{AtomicU16, Ordering};
+
 use parastation_core::sio0::{InputProvider, JoypadButton};
 use winit::keyboard::KeyCode;
 
@@ -31,7 +31,7 @@ const KEY_MAP: &[(KeyCode, JoypadButton)] = &[
     (KeyCode::KeyC, JoypadButton::L3),
     (KeyCode::KeyV, JoypadButton::R3),
 ];
- 
+
 /// Looks up the JoypadButton bitmask bound to a given key, if any
 fn button_for_key(key: KeyCode) -> Option<u16> {
     KEY_MAP
@@ -39,25 +39,25 @@ fn button_for_key(key: KeyCode) -> Option<u16> {
         .find(|(k, _)| *k == key)
         .map(|(_, button)| *button as u16)
 }
- 
+
 #[derive(Clone)]
 pub struct KeyboardState {
     bits: Arc<AtomicU16>,
 }
- 
+
 impl KeyboardState {
     pub fn new() -> Self {
         Self {
             bits: Arc::new(AtomicU16::new(0xFFFF)), // all buttons released
         }
     }
- 
+
     pub fn key_pressed(&self, key: KeyCode) {
         if let Some(mask) = button_for_key(key) {
             self.bits.fetch_and(!mask, Ordering::Relaxed);
         }
     }
- 
+
     pub fn key_released(&self, key: KeyCode) {
         if let Some(mask) = button_for_key(key) {
             self.bits.fetch_or(mask, Ordering::Relaxed);
@@ -68,13 +68,13 @@ impl KeyboardState {
 pub struct KeyboardInputProvider {
     state: KeyboardState,
 }
- 
+
 impl KeyboardInputProvider {
     pub fn new(state: KeyboardState) -> Self {
         Self { state }
     }
 }
- 
+
 impl InputProvider for KeyboardInputProvider {
     fn get_joypad_state(&self) -> u16 {
         self.state.bits.load(Ordering::Relaxed)

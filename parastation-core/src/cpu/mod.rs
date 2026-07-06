@@ -8,6 +8,7 @@
 
 mod cop0;
 mod gte;
+mod gte_div;
 pub mod ir;
 
 pub use cop0::Cop0;
@@ -141,12 +142,15 @@ impl Cpu {
 
     // Coprocessor 2
     pub fn read_gte(&self, reg: GteRegister) -> u32 {
-        println!("Reading GTE register {:?}", reg);
-        0
+        self.gte.read_register(reg)
     }
 
     pub fn write_gte(&mut self, reg: GteRegister, value: u32) {
-        println!("Writing GTE register {:?} with value 0x{:08X}", reg, value);
+        self.gte.write_register(reg, value);
+    }
+
+    pub fn execute_gte(&mut self, command: u32) {
+        self.gte.execute_command(command);
     }
 
     // Load delay slot

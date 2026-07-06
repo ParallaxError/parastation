@@ -9,7 +9,7 @@
  */
 
 use crate::backend::Backend;
-use crate::cpu::{Cop0Register, Cpu, MipsRegister, ir::IrOp};
+use crate::cpu::{Cop0Register, Cpu, GteRegister, MipsRegister, ir::IrOp};
 use crate::system_bus::SystemBus;
 
 pub struct Interpreter;
@@ -103,10 +103,10 @@ impl Interpreter {
             // Coprocessor opcodes
             IrOp::Mfc0 { dst, cop_reg } => self.op_mfc0(dst, cop_reg, cpu),
             IrOp::Mtc0 { src, cop_reg } => self.op_mtc0(src, cop_reg, cpu),
-            IrOp::Mfc2 { dst, cop_reg } => self.op_mfc2(dst, cop_reg.0, cpu),
-            IrOp::Mtc2 { src, cop_reg } => self.op_mtc2(src, cop_reg.0, cpu),
-            IrOp::Cfc2 { dst, cop_reg } => self.op_cfc2(dst, cop_reg.0, cpu),
-            IrOp::Ctc2 { src, cop_reg } => self.op_ctc2(src, cop_reg.0, cpu),
+            IrOp::Mfc2 { dst, cop_reg } => self.op_mfc2(dst, cop_reg, cpu),
+            IrOp::Mtc2 { src, cop_reg } => self.op_mtc2(src, cop_reg, cpu),
+            IrOp::Cfc2 { dst, cop_reg } => self.op_cfc2(dst, cop_reg, cpu),
+            IrOp::Ctc2 { src, cop_reg } => self.op_ctc2(src, cop_reg, cpu),
             IrOp::Cop2 { command } => self.op_cop2(command, cpu),
             IrOp::Lwc0 { dst, base, offset } => self.op_lwc0(dst, base, offset, cpu, bus),
             IrOp::Lwc2 { dst, base, offset } => self.op_lwc2(dst, base, offset, cpu, bus),
@@ -905,8 +905,9 @@ impl Interpreter {
         cpu.set_load_delay(dst, value);
     }
 
-    fn op_mfc2(&mut self, _dst: MipsRegister, _cop_reg: u8, _cpu: &mut Cpu) {
-        // unimplemented!("Coprocessor 2 is not implemented");
+    fn op_mfc2(&mut self, dst: MipsRegister, cop_reg: GteRegister, cpu: &mut Cpu) {
+        let value = cpu.read_gte(cop_reg);
+        cpu.set_load_delay(dst, value);
     }
 
     fn op_mtc0(&mut self, src: MipsRegister, cop_reg: Cop0Register, cpu: &mut Cpu) {
@@ -914,20 +915,23 @@ impl Interpreter {
         cpu.write_cop0(cop_reg, value);
     }
 
-    fn op_mtc2(&mut self, _src: MipsRegister, _cop_reg: u8, _cpu: &mut Cpu) {
-        // unimplemented!("Coprocessor 2 is not implemented");
+    fn op_mtc2(&mut self, src: MipsRegister, cop_reg: GteRegister, cpu: &mut Cpu) {
+        let value = cpu.read_reg(src);
+        cpu.write_gte(cop_reg, value);
     }
 
-    fn op_cfc2(&mut self, _dst: MipsRegister, _cop_reg: u8, _cpu: &mut Cpu) {
-        // eprintln!("Coprocessor 2 is not implemented");
+    fn op_cfc2(&mut self, dst: MipsRegister, cop_reg: GteRegister, cpu: &mut Cpu) {
+        let value = cpu.read_gte(GteRegister(cop_reg.0 + 32));
+        cpu.set_load_delay(dst, value);
     }
 
-    fn op_ctc2(&mut self, _src: MipsRegister, _cop_reg: u8, _cpu: &mut Cpu) {
-        // eprintln!("Coprocessor 2 is not implemented");
+    fn op_ctc2(&mut self, src: MipsRegister, cop_reg: GteRegister, cpu: &mut Cpu) {
+        let value = cpu.read_reg(src);
+        cpu.write_gte(GteRegister(cop_reg.0 + 32), value);
     }
 
-    fn op_cop2(&mut self, _command: u32, _cpu: &mut Cpu) {
-        // unimplemented!("Coprocessor 2 is not implemented");
+    fn op_cop2(&mut self, command: u32, cpu: &mut Cpu) {
+        cpu.execute_gte(command);
     }
 
     fn op_lwc0(
@@ -943,13 +947,15 @@ impl Interpreter {
 
     fn op_lwc2(
         &mut self,
-        _dst: MipsRegister,
-        _base: MipsRegister,
-        _offset: i16,
-        _cpu: &mut Cpu,
-        _bus: &mut SystemBus,
+        dst: GteRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
     ) {
-        // unimplemented!("Coprocessor 2 load instructions are not implemented");
+        let addr = cpu.read_reg(base).wrapping_add(offset as u32);
+        let value = bus.read32(addr);
+        cpu.write_gte(dst, value);
     }
 
     fn op_swc0(
@@ -965,13 +971,15 @@ impl Interpreter {
 
     fn op_swc2(
         &mut self,
-        _src: MipsRegister,
-        _base: MipsRegister,
-        _offset: i16,
-        _cpu: &mut Cpu,
-        _bus: &mut SystemBus,
+        src: GteRegister,
+        base: MipsRegister,
+        offset: i16,
+        cpu: &mut Cpu,
+        bus: &mut SystemBus,
     ) {
-        // unimplemented!("Coprocessor 2 store instructions are not implemented");
+        let addr = cpu.read_reg(base).wrapping_add(offset as u32);
+        let value = cpu.read_gte(src);
+        bus.write32(addr, value);
     }
 
     fn op_rfe(&mut self, cpu: &mut Cpu) {
