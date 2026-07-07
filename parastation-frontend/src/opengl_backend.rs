@@ -405,6 +405,7 @@ impl OpenGlBackend {
         tex_x: f32,
         tex_y: f32,
         semi_transparent: bool,
+        raw_texture: bool,
         semi_transparency_mode: u8,
         texture_window: &TextureWindow,
         drawing_area: &DrawingArea,
@@ -434,11 +435,19 @@ impl OpenGlBackend {
                     .as_ref(),
                 0,
             );
+
             self.gl.uniform_1_i32(
                 self.gl
                     .get_uniform_location(self.textured_program, "is_semi_transparent")
                     .as_ref(),
                 semi_transparent as i32,
+            );
+
+            self.gl.uniform_1_i32(
+                self.gl
+                    .get_uniform_location(self.textured_program, "is_raw_texture")
+                    .as_ref(),
+                raw_texture as i32,
             );
 
             self.gl.uniform_2_f32(
@@ -528,6 +537,7 @@ impl OpenGlBackend {
             tex_x,
             tex_y,
             semi_transparent,
+            texture_params.raw_texture,
             texture_params.tex_page.semi_transparency,
             &params.texture_window,
             &params.drawing_area,
@@ -576,6 +586,7 @@ impl OpenGlBackend {
             tex_x,
             tex_y,
             semi_transparent,
+            texture_params.raw_texture,
             texture_params.tex_page.semi_transparency,
             &params.texture_window,
             &params.drawing_area,
@@ -653,6 +664,7 @@ impl OpenGlBackend {
             tex_x,
             tex_y,
             semi_transparent,
+            raw_texture,
             mode.semi_transparency,
             &params.texture_window,
             &params.drawing_area,
@@ -743,6 +755,7 @@ impl GpuBackend for OpenGlBackend {
                 let flat = |x, y| FlatVertex {
                     vertex: Vertex { x, y },
                 };
+
                 self.draw_flat_quad(
                     flat(x0, y0),
                     flat(x1, y0),
@@ -768,6 +781,7 @@ impl GpuBackend for OpenGlBackend {
                     RectSize::Fixed8x8 => (8, 8),
                     RectSize::Fixed16x16 => (16, 16),
                 };
+
                 self.draw_textured_rect(
                     *pos,
                     w,
@@ -977,10 +991,10 @@ impl GpuBackend for OpenGlBackend {
     }
 
     fn present(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16) {
-        let vram_x = 0;
-        let vram_y = 0;
-        let w = 1024;
-        let h = 512;
+        // let vram_x = 0;
+        // let vram_y = 0;
+        // let w = 1024;
+        // let h = 512;
         unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 

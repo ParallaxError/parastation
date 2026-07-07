@@ -51,6 +51,7 @@ pub enum Gp0Command {
 
 /// Decode a GP0 command from the first word of the command buffer
 pub fn decode_gp0_command(word: u32) -> Gp0Command {
+    // TODO please use updated psx-spx for dispatch, this is kind of bad
     let command_id = (word >> 24) as u8;
     match command_id {
         0x00 => Gp0Command::Nop,
@@ -59,14 +60,14 @@ pub fn decode_gp0_command(word: u32) -> Gp0Command {
         0x03 => Gp0Command::Unknown0x03,
         0x1F => Gp0Command::RaiseIrq,
 
-        0x20 | 0x22 => Gp0Command::MonochromeTri,
-        0x28 | 0x2A => Gp0Command::MonochromeQuad,
+        0x20 | 0x21 | 0x22 | 0x23 => Gp0Command::MonochromeTri,
+        0x28 | 0x29 | 0x2A | 0x2B => Gp0Command::MonochromeQuad,
         0x24 | 0x25 | 0x26 | 0x27 => Gp0Command::TexturedTri,
         0x2C | 0x2D | 0x2E | 0x2F => Gp0Command::TexturedQuad,
-        0x30 | 0x32 => Gp0Command::ShadedTri,
-        0x38 | 0x3A => Gp0Command::ShadedQuad,
-        0x34 | 0x36 => Gp0Command::ShadedTexturedTri,
-        0x3C | 0x3E => Gp0Command::ShadedTexturedQuad,
+        0x30 | 0x31 | 0x32 | 0x33 => Gp0Command::ShadedTri,
+        0x38 | 0x39 | 0x3A | 0x3B => Gp0Command::ShadedQuad,
+        0x34 | 0x35 | 0x36 | 0x37 => Gp0Command::ShadedTexturedTri,
+        0x3C | 0x3D | 0x3E | 0x3F => Gp0Command::ShadedTexturedQuad,
 
         0x40 | 0x42 => Gp0Command::MonochromeLine,
         0x48 | 0x4A => Gp0Command::MonochromePolyline,

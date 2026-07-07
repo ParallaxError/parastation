@@ -4,6 +4,7 @@ uniform usampler2D vram;
 uniform int tex_depth;
 uniform vec2 tex_page;
 uniform bool is_semi_transparent;
+uniform bool is_raw_texture;
 uniform vec4 tex_window;
 
 in vec3 frag_colour;
@@ -49,11 +50,11 @@ void main() {
     uint raw_g = (raw >>  5u) & 0x1Fu;
     uint raw_b = (raw >> 10u) & 0x1Fu;
 
-    // frag_colour is 0-255 scale, and so we scale it down to 0-31 for the RGB555 output, and multiply by the 
+    // frag_colour is 0-255 scale, and so we scale it down to 0-2 for the RGB555 output, and multiply by the 
     // texture colour
-    uint out_r = min((raw_r * uint(frag_colour.r)) / 128u, 31u);
-    uint out_g = min((raw_g * uint(frag_colour.g)) / 128u, 31u);
-    uint out_b = min((raw_b * uint(frag_colour.b)) / 128u, 31u);
+    uint out_r = is_raw_texture ? raw_r : min((raw_r * uint(frag_colour.r)) / 128u, 31u);
+    uint out_g = is_raw_texture ? raw_g : min((raw_g * uint(frag_colour.g)) / 128u, 31u);
+    uint out_b = is_raw_texture ? raw_b : min((raw_b * uint(frag_colour.b)) / 128u, 31u);
 
     // Repack to RGB555 for the PS1 output
     uint bgr555 = out_r | (out_g << 5u) | (out_b << 10u);
