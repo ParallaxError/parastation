@@ -213,6 +213,7 @@ impl Gpu {
             Gp0Command::TexturedQuad => self.draw_textured_quad(),
             Gp0Command::ShadedTri => self.draw_shaded_tri(),
             Gp0Command::ShadedQuad => self.draw_shaded_quad(),
+            Gp0Command::ShadedTexturedQuad => self.draw_shaded_textured_quad(),
 
             Gp0Command::VariableMonochromeRectangle => self.draw_variable_monochrome_rectangle(),
             Gp0Command::MonochromeRectangle => self.draw_monochrome_rectangle(),
@@ -224,7 +225,10 @@ impl Gpu {
             Gp0Command::CopyRect => self.copy_rect(),
 
             Gp0Command::SetRenderingAttribute => self.set_rendering_attribute(),
-            _ => eprintln!("GP0 command execution not implemented: {:?}", command),
+            _ => println!(
+                "GP0 command execution not implemented: {:?}, gp0_buffer: {:?}",
+                command, self.gp0_buffer
+            ),
         }
     }
 }
@@ -310,6 +314,7 @@ impl Gpu {
             current_y: y,
             words_remaining: words,
         });
+
         self.gp0_words_remaining = 0; // We'll receive words until the count in vram_transfer is 0
         self.gp0_buffer.clear(); // Clear the buffer to receive the pixel data
         self.backend.vram_write_begin(x, y, w, h, &self.state.mask);
@@ -743,6 +748,87 @@ impl Gpu {
         self.backend.draw_polygon(&quad, &self.get_draw_params());
     }
 
+    fn draw_shaded_textured_quad(&mut self) {
+        /*
+        GP0(3Ch) - Shaded Textured four-point polygon, opaque, texture-blending
+        GP0(3Eh) - Shaded Textured four-point polygon, semi-transparent, tex-blend
+        1st  Color1+Command    (CcBbGgRrh)
+        2nd  Vertex1           (YyyyXxxxh)
+        3rd  Texcoord1+Palette (ClutYyXxh)
+        4th  Color2            (00BbGgRrh)
+        5th  Vertex2           (YyyyXxxxh)
+        6th  Texcoord2+Texpage (PageYyXxh)
+        7th  Color3            (00BbGgRrh)
+        8th  Vertex3           (YyyyXxxxh)
+        9th  Texcoord3         (0000YyXxh)
+        (10th) Color4           (00BbGgRrh) (if any)
+        (11th) Vertex4          (YyyyXxxxh) (if any)
+        (12th) Texcoord4        (0000YyXxh) (if any)
+        */
+
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour1 = Colour::from_word(self.gp0_buffer[0]);
+        let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
+        let texcoord1 = Texcoord::from_word(self.gp0_buffer[2]);
+        let colour2 = Colour::from_word(self.gp0_buffer[3]);
+        let vertex2 = Vertex::from_word(self.gp0_buffer[4]);
+        let texcoord2 = Texcoord::from_word(self.gp0_buffer[5]);
+        let colour3 = Colour::from_word(self.gp0_buffer[6]);
+        let vertex3 = Vertex::from_word(self.gp0_buffer[7]);
+        let texcoord3 = Texcoord::from_word(self.gp0_buffer[8]);
+        let colour4 = Colour::from_word(self.gp0_buffer[9]);
+        let vertex4 = Vertex::from_word(self.gp0_buffer[10]);
+        let texcoord4 = Texcoord::from_word(self.gp0_buffer[11]);
+
+        let semi_transparent = match cmd {
+            0x3C => false,
+            0x3E => true,
+            _ => unreachable!(),
+        };
+
+        let tex_page = TexPageAttr::from_word(self.gp0_buffer[5] >> 16);
+
+        // Textured polygons implicitly update the persistent state, weird quirk
+        // https://emudocs.layle.dev/PSX/Games/#fragmented-graphics
+        self.state.draw_mode.texture_base_x = tex_page.x;
+        self.state.draw_mode.texture_base_y = tex_page.y;
+        self.state.draw_mode.semi_transparency = tex_page.semi_transparency;
+        self.state.draw_mode.texture_page_colours = tex_page.colour_depth;
+
+        let quad = Polygon::ShadedTextured {
+            vertices: PolygonVertices::Quad(
+                ShadedTexturedVertex {
+                    vertex: vertex1,
+                    colour: colour1,
+                    texcoord: texcoord1,
+                },
+                ShadedTexturedVertex {
+                    vertex: vertex2,
+                    colour: colour2,
+                    texcoord: texcoord2,
+                },
+                ShadedTexturedVertex {
+                    vertex: vertex3,
+                    colour: colour3,
+                    texcoord: texcoord3,
+                },
+                ShadedTexturedVertex {
+                    vertex: vertex4,
+                    colour: colour4,
+                    texcoord: texcoord4,
+                },
+            ),
+            semi_transparent: semi_transparent,
+            texture_params: TextureParams {
+                clut: Clut::from_word(self.gp0_buffer[2]),
+                tex_page,
+                raw_texture: false, // Shaded textured polygons are always texture-blending
+            },
+        };
+
+        self.backend.draw_polygon(&quad, &self.get_draw_params());
+    }
+
     fn draw_variable_monochrome_rectangle(&mut self) {
         /*
         GP0(60h) - Monochrome Rectangle (variable size) (opaque)
@@ -947,6 +1033,8 @@ impl Gpu {
                 self.gp0_buffer.clear();
                 self.gp0_words_remaining = 0
             }
+            // Acknowledge IRQ
+            0x02 => self.state.irq = false,
             // Display enable
             0x03 => self.state.display_state.display_enable = (word & 0x1) != 0,
             // Set DMA direction

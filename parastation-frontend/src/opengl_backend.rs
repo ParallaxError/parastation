@@ -305,8 +305,8 @@ impl OpenGlBackend {
             self.gl.scissor(
                 drawing_area.x1 as i32,
                 drawing_area.y1 as i32,
-                (drawing_area.x2 - drawing_area.x1) as i32,
-                (drawing_area.y2 - drawing_area.y1) as i32,
+                (drawing_area.x2 - drawing_area.x1 + 1) as i32,
+                (drawing_area.y2 - drawing_area.y1 + 1) as i32,
             );
 
             self.gl.use_program(Some(self.flat_program));
@@ -419,8 +419,8 @@ impl OpenGlBackend {
             self.gl.scissor(
                 drawing_area.x1 as i32,
                 drawing_area.y1 as i32,
-                (drawing_area.x2 - drawing_area.x1) as i32,
-                (drawing_area.y2 - drawing_area.y1) as i32,
+                (drawing_area.x2 - drawing_area.x1 + 1) as i32,
+                (drawing_area.y2 - drawing_area.y1 + 1) as i32,
             );
 
             self.gl.use_program(Some(self.textured_program));
@@ -513,6 +513,54 @@ impl OpenGlBackend {
             r: colour.r as f32,
             g: colour.g as f32,
             b: colour.b as f32,
+            u: v.texcoord.u as f32,
+            v: v.texcoord.v as f32,
+            clut_x: texture_params.clut.x as f32 * 16.0, // CLUT x is in 16-pixel units
+            clut_y: texture_params.clut.y as f32,
+        };
+
+        let tex_depth = texture_params.tex_page.colour_depth as i32;
+
+        self.submit_textured(
+            &[make_vert(v0), make_vert(v1), make_vert(v2)],
+            glow::TRIANGLES,
+            tex_depth,
+            tex_x,
+            tex_y,
+            semi_transparent,
+            texture_params.tex_page.semi_transparency,
+            &params.texture_window,
+            &params.drawing_area,
+        );
+    }
+
+    fn draw_shaded_textured_triangle(
+        &mut self,
+        v0: ShadedTexturedVertex,
+        v1: ShadedTexturedVertex,
+        v2: ShadedTexturedVertex,
+        texture_params: &TextureParams,
+        semi_transparent: bool,
+        params: &DrawParams,
+    ) {
+        let ox = params.drawing_offset.x;
+        let oy = params.drawing_offset.y;
+
+        // Texpage offset in VRAM pixels
+        let tex_x = (texture_params.tex_page.x as f32) * 64.0;
+        let tex_y = if texture_params.tex_page.y {
+            256.0
+        } else {
+            0.0
+        };
+
+        // For each vertex lets make a quick func to convert it
+        let make_vert = |v: ShadedTexturedVertex| TexturedGlVertex {
+            x: (v.vertex.x + ox) as f32,
+            y: (v.vertex.y + oy) as f32,
+            r: v.colour.r as f32,
+            g: v.colour.g as f32,
+            b: v.colour.b as f32,
             u: v.texcoord.u as f32,
             v: v.texcoord.v as f32,
             clut_x: texture_params.clut.x as f32 * 16.0, // CLUT x is in 16-pixel units
@@ -650,8 +698,22 @@ impl GpuBackend for OpenGlBackend {
                     );
                 });
             }
-            _ => {
-                println!("draw_polygon: {:#?}\nparams: {:#?}", polygon, params);
+            Polygon::ShadedTextured {
+                texture_params,
+                vertices,
+                semi_transparent,
+            } => {
+                vertices.triangles(|v0, v1, v2| {
+                    // For shaded textured, we will just use the colour of the first vertex for now
+                    self.draw_shaded_textured_triangle(
+                        v0,
+                        v1,
+                        v2,
+                        texture_params,
+                        *semi_transparent,
+                        params,
+                    );
+                });
             }
         }
     }
@@ -915,10 +977,10 @@ impl GpuBackend for OpenGlBackend {
     }
 
     fn present(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16) {
-        // let vram_x = 0;
-        // let vram_y = 0;
-        // let w = 1024;
-        // let h = 512;
+        let vram_x = 0;
+        let vram_y = 0;
+        let w = 1024;
+        let h = 512;
         unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 
