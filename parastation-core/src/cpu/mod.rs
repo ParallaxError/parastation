@@ -68,10 +68,19 @@ impl Cpu {
     }
 
     pub fn write_reg(&mut self, reg: MipsRegister, value: u32) {
-        if reg.0 != 0 {
-            // Register 0 is hardwired to 0
-            self.registers[reg.0 as usize] = value;
+        if reg.0 == 0 {
+            return;
         }
+
+        // If a load delay is pending for this same register, this write overwrites it, so cancel the pending load so it
+        // doesn't clobber this write on the next commit
+        if let Some((pending_reg, _)) = self.load_delay {
+            if pending_reg.0 == reg.0 {
+                self.load_delay = None;
+            }
+        }
+
+        self.registers[reg.0 as usize] = value;
     }
 
     pub fn read_reg_or_pending(&self, reg: MipsRegister) -> u32 {

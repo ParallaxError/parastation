@@ -12,7 +12,6 @@
  */
 
 // Imports
-use crate::VBLANK_CYCLES;
 use crate::bios::Bios;
 use crate::cd_rom::CdRom;
 use crate::dma::{DmaController, DmaTransfer};
@@ -23,7 +22,9 @@ use crate::ram::Ram;
 use crate::scheduler::{Scheduler, SchedulerEvent};
 use crate::scratchpad::Scratchpad;
 use crate::sio0::{InputProvider, SioController};
+use crate::spu::{Spu, SpuBackend};
 use crate::timers::Timers;
+use crate::{SPU_CYCLES, VBLANK_CYCLES};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 enum AccessWidth {
@@ -49,6 +50,7 @@ pub struct SystemBus {
     pub interrupt_controller: InterruptController,
     dma: DmaController,
     pub gpu: Gpu,
+    pub spu: Spu,
     cd_rom: CdRom,
     timers: Timers,
 }
@@ -57,12 +59,15 @@ impl SystemBus {
     pub fn new(
         bios: Bios,
         gpu_backend: Box<dyn GpuBackend>,
+        spu_backend: Box<dyn SpuBackend>,
         joy1: Box<dyn InputProvider>,
         joy2: Box<dyn InputProvider>,
     ) -> Self {
         // Create scheduler and schedule an initial VBlank interrupt to occur
         let mut scheduler = Scheduler::new();
         scheduler.schedule(SchedulerEvent::VBlank, VBLANK_CYCLES);
+        // Also schedule an initial SPU tick to occur
+        scheduler.schedule(SchedulerEvent::Spu, SPU_CYCLES);
 
         Self {
             scheduler,
@@ -73,6 +78,7 @@ impl SystemBus {
             interrupt_controller: InterruptController::new(),
             dma: DmaController::new(),
             gpu: Gpu::new(gpu_backend),
+            spu: Spu::new(spu_backend),
             cd_rom: CdRom::new(),
             timers: Timers::new(),
         }
@@ -128,6 +134,11 @@ macro_rules! bus_read {
         if let Some(offset) = CDROM_REGISTERS.contains(addr) {
             return $self.cd_rom.read_register(offset) as _;
         }
+        if let Some(offset) = SPU_REGISTERS.contains(addr) {
+            return $self
+                .spu
+                .read_register(offset, &mut $self.interrupt_controller) as _;
+        }
 
         let word = $self.read_hardware(addr);
         let shift = match $width {
@@ -158,6 +169,13 @@ macro_rules! bus_write {
             return $self
                 .cd_rom
                 .write_register(offset, $value as u8, &mut $self.scheduler);
+        }
+        if let Some(offset) = SPU_REGISTERS.contains(addr) {
+            return $self.spu.write_register(
+                offset,
+                $value as u16,
+                &mut $self.interrupt_controller,
+            );
         }
         if let Some(_) = EXP2.contains(addr) {
             return;
@@ -191,9 +209,6 @@ impl SystemBus {
         if let Some(offset) = GPU_REGISTERS.contains(addr) {
             return self.read_gpu_register(offset);
         }
-        if let Some(_offset) = SPU_REGISTERS.contains(addr) {
-            return 0;
-        } // TODO spu
 
         eprintln!("Unhandled read at address {addr:#x}");
         0
@@ -245,9 +260,6 @@ impl SystemBus {
         if let Some(offset) = GPU_REGISTERS.contains(addr) {
             return self.write_gpu_register(offset, value);
         }
-        if let Some(_offset) = SPU_REGISTERS.contains(addr) {
-            return;
-        } // TODO spu
 
         if addr == 0xFFFE_0130 {
             return;
@@ -405,6 +417,32 @@ impl SystemBus {
             addr = addr.wrapping_add(4); // Wrap around the 2MB RAM size
         }
     }
+
+    fn dma_spu_write(&mut self, base_addr: u32, word_count: u32) {
+        let mut addr = base_addr & 0x001F_FFFC;
+        for _ in 0..word_count {
+            let word = self.ram.read32(addr);
+
+            let lo = (word & 0xFFFF) as u16;
+            let hi = (word >> 16) as u16;
+
+            self.spu.write_data_port(lo, &mut self.interrupt_controller);
+            self.spu.write_data_port(hi, &mut self.interrupt_controller);
+            addr = addr.wrapping_add(4); // Wrap around the 2MB RAM size
+        }
+    }
+
+    fn dma_spu_read(&mut self, base_addr: u32, word_count: u32) {
+        let mut addr = base_addr & 0x001F_FFFC;
+        for _ in 0..word_count {
+            let lo = self.spu.read_data_port(&mut self.interrupt_controller);
+            let hi = self.spu.read_data_port(&mut self.interrupt_controller);
+
+            let word = (hi as u32) << 16 | (lo as u32);
+            self.ram.write32(addr, word);
+            addr = addr.wrapping_add(4); // Wrap around the 2MB RAM size
+        }
+    }
 }
 
 // DMA dispatch
@@ -428,6 +466,14 @@ impl SystemBus {
                 dest_addr,
                 word_count,
             } => self.dma_gpu_vram_read(dest_addr, word_count),
+            DmaTransfer::SpuWrite {
+                src_addr,
+                word_count,
+            } => self.dma_spu_write(src_addr, word_count),
+            DmaTransfer::SpuRead {
+                dest_addr,
+                word_count,
+            } => self.dma_spu_read(dest_addr, word_count),
             _ => eprintln!("Unhandled DMA transfer type: {:?}", transfer),
         }
     }
@@ -476,8 +522,11 @@ impl SystemBus {
                     self.sio
                         .handle_event(byte, dsr, &mut self.interrupt_controller);
                 }
-                _ => {
-                    eprintln!("Unhandled scheduler event: {:?}", event);
+                SchedulerEvent::Spu => {
+                    let cd_sample = self.cd_rom.pull_cd_audio_sample();
+                    self.spu
+                        .handle_event(cd_sample, &mut self.interrupt_controller);
+                    self.scheduler.schedule(SchedulerEvent::Spu, SPU_CYCLES);
                 }
             }
         }

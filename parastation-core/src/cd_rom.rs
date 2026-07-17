@@ -14,8 +14,10 @@ use std::io::{Read, Seek, SeekFrom};
 
 use crate::interrupt_controller::{Interrupt, InterruptController};
 use crate::scheduler::{Scheduler, SchedulerEvent};
+use crate::spu::PcmSample;
+use crate::xadpcm::{XaSubHeader, XadpcmDecoder};
 
-const SECTOR_SIZE: usize = 2352; // Size of a CD-ROM sector in bytes
+pub const SECTOR_SIZE: usize = 2352; // Size of a CD-ROM sector in bytes
 
 /// Inserted disc structure, represented by a file and a list of tracks.
 struct Disc {
@@ -23,7 +25,7 @@ struct Disc {
     tracks: Vec<Track>, // List of tracks on the disc
 }
 
-#[derive(Clone)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 enum TrackType {
     Audio,
     Data,
@@ -73,12 +75,22 @@ pub struct CdRom {
     seek_target: Option<u32>, // Target logical block address for seek operations
     current_logical_block: u32, // Current logical block address of the disc head
     reading: bool,            // Currently reading sectors (ReadN/ReadS command)
+    playing: bool,            // Currently playing audio (Play command)
     disc: Option<Disc>,       // Currently inserted disc, if any
 
     sector_buffer: [u8; SECTOR_SIZE], // Buffer for storing the current sector data, useful portion in data_buffer
     data_fifo_loaded: bool, // Set by the "want data" bit, indicates that sector reading FIFO has data
     data_buffer: Vec<u8>,   // Buffer for data FIFO reads
     data_buffer_offset: usize, // Read offset within the data buffer for FIFO reads
+
+    // XA filter parameters from Setmode
+    xa_filter_enabled: bool, // set by Setmode bit 3
+    xa_filter_file: u8,      // set by Setfilter param 1
+    xa_filter_channel: u8,   // set by Setfilter param 2
+
+    // Audio
+    pending_cdda_samples: VecDeque<(PcmSample, PcmSample)>, // Pending CDDA samples to be sent to the SPU
+    xadpcm_decoder: XadpcmDecoder, // XADPCM decoder for handling XA audio decoding
 }
 
 // Helpers
@@ -89,8 +101,20 @@ fn msf_to_lba(minutes: u8, seconds: u8, frames: u8) -> u32 {
     (minutes as u32 * 60 + seconds as u32) * 75 + frames as u32
 }
 
+fn lba_to_msf_bcd(lba: u32) -> (u8, u8) {
+    let lba = lba + 150; // PS1 MSF is offset by 2 seconds
+    let total_seconds = lba / 75;
+    let minutes = (total_seconds / 60) as u8;
+    let seconds = (total_seconds % 60) as u8;
+    (decimal_to_bcd(minutes), decimal_to_bcd(seconds))
+}
+
 fn bcd_to_decimal(bcd: u8) -> u8 {
     ((bcd >> 4) * 10) + (bcd & 0x0F)
+}
+
+fn decimal_to_bcd(n: u8) -> u8 {
+    ((n / 10) << 4) | (n % 10)
 }
 
 // Main interface
@@ -108,12 +132,20 @@ impl CdRom {
             seek_target: None,
             current_logical_block: 0,
             reading: false,
+            playing: false,
             disc: None,
 
             sector_buffer: [0u8; SECTOR_SIZE],
             data_fifo_loaded: false,
             data_buffer: Vec::new(),
             data_buffer_offset: 0,
+
+            xa_filter_enabled: false,
+            xa_filter_file: 0,
+            xa_filter_channel: 0,
+
+            pending_cdda_samples: VecDeque::new(),
+            xadpcm_decoder: XadpcmDecoder::new(),
         }
     }
 
@@ -219,7 +251,7 @@ impl CdRom {
         interrupt_controller: &mut InterruptController,
     ) {
         // TODO Do I need a check here? It should never do a sector read if it's paused since I cancel...
-        if !self.reading {
+        if !self.reading && !self.playing {
             return;
         }
 
@@ -230,9 +262,13 @@ impl CdRom {
             return;
         }
 
-        self.perform_sector_read();
-        self.push_response(&[self.get_status_byte()]);
-        self.set_interrupt(1, interrupt_controller);
+        self.perform_sector_read(scheduler);
+
+        // Only interrupt for ReadN/ReadS, not for Play
+        if self.reading {
+            self.push_response(&[self.get_status_byte()]);
+            self.set_interrupt(1, interrupt_controller);
+        }
         self.schedule_sector_read(scheduler);
     }
 
@@ -391,6 +427,17 @@ impl CdRom {
         byte
     }
 
+    pub fn pull_cd_audio_sample(&mut self) -> (PcmSample, PcmSample) {
+        // Interface similar to above but for audio samples, returning a tuple of left and right samples
+        if let Some(sample) = self.xadpcm_decoder.pending_xa_samples.pop_front() {
+            sample
+        } else if let Some(sample) = self.pending_cdda_samples.pop_front() {
+            sample
+        } else {
+            (PcmSample(0), PcmSample(0)) // buffer underrun - silence
+        }
+    }
+
     fn write_parameter_fifo(&mut self, value: u8) {
         if self.command_args.len() < 16 {
             self.command_args.push(value);
@@ -502,10 +549,142 @@ impl CdRom {
         scheduler.schedule(SchedulerEvent::CdRomSectorRead, delay);
     }
 
-    fn perform_sector_read(&mut self) {
+    // Quick helper for sector read brancing
+    fn track_type_for_lba(&self, lba: u32) -> TrackType {
+        let Some(disc) = &self.disc else {
+            return TrackType::Data;
+        };
+        disc.tracks
+            .iter()
+            .rev()
+            .find(|t| t.start_logical_block <= lba)
+            .map(|t| t.track_type.clone())
+            .unwrap_or(TrackType::Data)
+    }
+
+    fn xa_filter_matches(&self, subheader: &XaSubHeader) -> bool {
+        // If Setmode enabled the XA filter, only accept sectors matching the configured file/channel; otherwise accept
+        // any audio sector.
+        if !self.xa_filter_enabled {
+            return true;
+        }
+        subheader.file_number == self.xa_filter_file
+            && subheader.channel_number == self.xa_filter_channel
+    }
+
+    fn maybe_deliver_play_report(&mut self, lba: u32, scheduler: &mut Scheduler) {
+        // Only send reports if Setmode bit 2 is enabled and we're playing
+        if !self.playing || self.mode & 0x04 == 0 {
+            return;
+        }
+
+        let disc_lba_with_leadin = lba + 150; // disc-absolute, includes 2s lead-in
+        let asect = (disc_lba_with_leadin % 75) as u8;
+
+        // Only fires on these 8 boundaries per second
+        let report_absolute = match asect {
+            0x00 | 0x20 | 0x40 | 0x60 => Some(true),
+            0x10 | 0x30 | 0x50 | 0x70 => Some(false),
+            _ => None,
+        };
+
+        let Some(report_absolute) = report_absolute else {
+            return;
+        };
+
+        let Some(disc) = &self.disc else { return };
+        let Some(track) = disc
+            .tracks
+            .iter()
+            .rev()
+            .find(|t| t.start_logical_block <= lba)
+        else {
+            return;
+        };
+
+        let track_number: u8 = track.track_number;
+        let index = 1u8;
+
+        let (peaklo, peakhi) = (0u8, 0u8); // TODO peak level
+
+        let bytes = if report_absolute {
+            let (amm, ass) = lba_to_msf_bcd(lba);
+            let asect_bcd = decimal_to_bcd(asect);
+            vec![
+                self.get_status_byte(),
+                decimal_to_bcd(track_number),
+                decimal_to_bcd(index),
+                amm,
+                ass,
+                asect_bcd,
+                peaklo,
+                peakhi,
+            ]
+        } else {
+            let rel_lba = lba - track.start_logical_block;
+            let (mm, ss) = lba_to_msf_bcd(rel_lba - 150); // -150 since track relative
+            let sect = decimal_to_bcd((rel_lba % 75) as u8);
+            vec![
+                self.get_status_byte(),
+                decimal_to_bcd(track_number),
+                decimal_to_bcd(index),
+                mm,
+                ss | 0x80,
+                sect,
+                peaklo,
+                peakhi,
+            ]
+        };
+
+        self.schedule_event(cdrom_timing::DEFAULT_FIRST, bytes, 1, scheduler);
+    }
+
+    fn perform_sector_read(&mut self, scheduler: &mut Scheduler) {
         self.sector_buffer = self.read_sector(self.current_logical_block);
+        let track_type = self.track_type_for_lba(self.current_logical_block);
         self.current_logical_block += 1;
-        self.extract_data_buffer();
+
+        if track_type == TrackType::Audio {
+            self.extract_cdda_audio();
+            self.maybe_deliver_play_report(self.current_logical_block - 1, scheduler);
+            return;
+        }
+
+        /*
+        try_deliver_as_adpcm_sector:
+        reject if CD-DA AUDIO format
+        reject if sector isn't MODE2 format
+        reject if adpcm_disabled(setmode.6)
+        reject if filter_enabled(setmode.3) AND selected file/channel doesn't match
+        reject if submode isn't audio+realtime (bit2 and bit6 must be both set)
+        deliver: send sector to xa-adpcm decoder when passing above cases
+        try_deliver_as_data_sector:
+        reject data-delivery if "try_deliver_as_adpcm_sector" did do adpcm-delivery
+        reject if filter_enabled(setmode.3) AND submode is audio+realtime (bit2+bit6)
+        1st delivery attempt: send INT1+data, unless there's another INT pending
+        delay, and retry at later time... but this time with file/channel checking!
+        reject if filter_enabled(setmode.3) AND selected file/channel doesn't match
+        2nd delivery attempt: send INT1+data, unless there's another INT pending
+        */
+
+        let subheader: XaSubHeader = XaSubHeader::parse(&self.sector_buffer);
+
+        let adpcm_enabled = self.mode & 0x40 != 0; // Setmode bit 6
+        let is_realtime_audio = subheader.is_audio() && subheader.is_realtime(); // bits 2 AND 6 of submode
+
+        let deliver_as_adpcm = adpcm_enabled
+            && is_realtime_audio
+            && (!self.xa_filter_enabled || self.xa_filter_matches(&subheader));
+
+        if deliver_as_adpcm {
+            self.xadpcm_decoder
+                .decode_sector(&subheader, &self.sector_buffer);
+        } else {
+            let reject_data = self.xa_filter_enabled && is_realtime_audio;
+            if !reject_data {
+                self.extract_data_buffer();
+            }
+        }
     }
 
     fn read_sector(&mut self, lba: u32) -> [u8; SECTOR_SIZE] {
@@ -540,6 +719,19 @@ impl CdRom {
         buf
     }
 
+    fn extract_cdda_audio(&mut self) {
+        let samples: Vec<(PcmSample, PcmSample)> = self
+            .sector_buffer
+            .chunks_exact(4)
+            .map(|c| {
+                let l = i16::from_le_bytes([c[0], c[1]]);
+                let r = i16::from_le_bytes([c[2], c[3]]);
+                (PcmSample(l), PcmSample(r))
+            })
+            .collect();
+        self.pending_cdda_samples.extend(samples);
+    }
+
     fn extract_data_buffer(&mut self) {
         // Mode bit5 (0x20): 0 = 2048-byte data mode, 1 = 2340-byte whole-sector mode
         let (start, size) = if self.mode & 0x20 != 0 {
@@ -560,12 +752,16 @@ impl CdRom {
         match cmd {
             0x01 => self.cmd_getstat(scheduler),
             0x02 => self.cmd_setloc(scheduler),
+            0x03 => self.cmd_play(scheduler),
             0x06 => self.cmd_readn(scheduler),
             0x08 => self.cmd_stop(scheduler),
             0x09 => self.cmd_pause(scheduler),
             0x0A => self.cmd_init(scheduler),
             0x0C => self.cmd_demute(scheduler),
+            0x0D => self.cmd_setfilter(scheduler),
             0x0E => self.cmd_setmode(scheduler),
+            0x13 => self.cmd_gettn(scheduler),
+            0x14 => self.cmd_gettd(scheduler),
             0x15 => self.cmd_seekl(scheduler),
             0x19 => self.cmd_test(scheduler),
             0x1A => self.cmd_getid(scheduler),
@@ -602,6 +798,7 @@ impl CdRom {
         let sect = bcd_to_decimal(self.command_args.get(2).copied().unwrap_or(0));
 
         self.reading = false;
+        self.playing = false;
         // Cancel any pending sector read events since we are seeking to a new location
         scheduler.cancel(|event| matches!(event, SchedulerEvent::CdRomSectorRead));
 
@@ -615,6 +812,56 @@ impl CdRom {
         // 2 seconds of lead in on PS1 cd-roms supposedly... annoying.
         let lba = msf_to_lba(mm, ss, sect) - 150;
         self.seek_target = Some(lba);
+    }
+
+    // 0x03
+    fn cmd_play(&mut self, scheduler: &mut Scheduler) {
+        /*
+        Play - Command 03h (,track) --> INT3(stat) --> optional INT1(report bytes)
+        Starts CD Audio Playback. The parameter is optional, if there's no parameter given (or if it is 00h), then play
+        either starts at Setloc position (if there was a pending unprocessed Setloc), or otherwise starts at the current
+        location (eg. the last point seeked, or the current location of the current song; if it was already playing).
+        For a disk with N songs, Parameters 1..N are starting the selected track. Parameters N+1..99h are restarting the
+        begin of current track. The motor is switched off automatically when Play reaches the end of the disk, and
+        INT4(stat) is generated (with stat.bit7 cleared).
+        */
+
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![self.get_status_byte()],
+            3,
+            scheduler,
+        );
+
+        let pending_seek = self.seek_target.take();
+
+        self.reading = false;
+        self.playing = true;
+
+        // Play uses the current location when the parameter is omitted or 00h.
+        let track_param = self.command_args.get(0).copied().unwrap_or(0);
+        if track_param == 0 {
+            if let Some(target) = pending_seek {
+                self.current_logical_block = target;
+            }
+        } else if let Some(disc) = &self.disc {
+            let track_dec = bcd_to_decimal(track_param);
+
+            if let Some(track) = disc.tracks.iter().find(|t| t.track_number == track_dec) {
+                self.current_logical_block = track.start_logical_block;
+            } else if let Some(current_track) = disc
+                .tracks
+                .iter()
+                .rev()
+                .find(|t| t.start_logical_block <= self.current_logical_block)
+            {
+                // N+1..99h: restart current track
+                self.current_logical_block = current_track.start_logical_block;
+            }
+        }
+
+        scheduler.cancel(|event| matches!(event, SchedulerEvent::CdRomSectorRead));
+        self.schedule_sector_read(scheduler);
     }
 
     // 0x06
@@ -637,6 +884,7 @@ impl CdRom {
             self.current_logical_block = target;
         }
 
+        self.playing = false;
         self.reading = true;
         self.schedule_sector_read(scheduler);
     }
@@ -652,7 +900,7 @@ impl CdRom {
         the new status (with bit1 cleared).
         */
 
-        let stop_time = if self.reading || self.seek_target.is_some() {
+        let stop_time = if self.reading || self.playing || self.seek_target.is_some() {
             if self.mode & 0x80 != 0 {
                 cdrom_timing::STOP_SECOND_2X
             } else {
@@ -664,6 +912,7 @@ impl CdRom {
 
         // Should give the current status before stopping but with bit5 already cleared
         self.reading = false;
+        self.playing = false;
         let status_before_stop = self.get_status_byte();
 
         self.seek_target = None;
@@ -696,13 +945,14 @@ impl CdRom {
         } else {
             cdrom_timing::PAUSE_SECOND_1X
         };
-        pause_time = if self.reading {
+        pause_time = if self.reading || self.playing {
             pause_time
         } else {
             cdrom_timing::PAUSE_SECOND_ALREADY_PAUSED
         };
         let status_while_reading = self.get_status_byte();
         self.reading = false;
+        self.playing = false;
 
         // Cancel any pending sector read events
         scheduler.cancel(|event| matches!(event, SchedulerEvent::CdRomSectorRead));
@@ -725,6 +975,9 @@ impl CdRom {
 
         // TODO motor
         self.mode = 0x20; // Set mode to 20h
+        self.playing = false;
+        self.reading = false;
+        self.seek_target = None;
 
         self.schedule_event(
             cdrom_timing::DEFAULT_FIRST,
@@ -757,6 +1010,28 @@ impl CdRom {
         );
     }
 
+    // 0x0D
+    fn cmd_setfilter(&mut self, scheduler: &mut Scheduler) {
+        /*
+        Setfilter - Command 0Dh,file,channel --> INT3(stat)
+        Automatic ADPCM (CD-ROM XA) filter ignores sectors except those which have the same channel and file numbers in
+        their subheader. This is the mechanism used to select which of multiple songs in a single .XA file to play.
+        Setfilter does not affect actual reading (sector reads still occur for all sectors).
+        XXX err... that is... does not affect reading of non-ADPCM sectors (normal "data" sectors are kept received
+        regardless of Setfilter).
+        */
+
+        self.xa_filter_file = self.command_args.get(0).copied().unwrap_or(0);
+        self.xa_filter_channel = self.command_args.get(1).copied().unwrap_or(0);
+
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![self.get_status_byte()],
+            3,
+            scheduler,
+        );
+    }
+
     // 0x0E
     fn cmd_setmode(&mut self, scheduler: &mut Scheduler) {
         /*
@@ -772,9 +1047,131 @@ impl CdRom {
         */
 
         self.mode = self.command_args.get(0).copied().unwrap_or(0);
+
+        // Set some flags based on the mode bits
+        // TODO: should mode be split up more? for example make double speed a bool
+        self.xa_filter_enabled = self.mode & 0x08 != 0;
+
         self.schedule_event(
             cdrom_timing::DEFAULT_FIRST,
             vec![self.get_status_byte()],
+            3,
+            scheduler,
+        );
+    }
+
+    // 0x13
+    fn cmd_gettn(&mut self, scheduler: &mut Scheduler) {
+        /*
+        GetTN - Command 13h --> INT3(stat,first,last) ;BCD
+        Get first track number, and last track number in the TOC of the current Session. The number of tracks in the
+        current session can be calculated as (last-first+1). The first track number is usually 01h in the first
+        (or only) session, and "last track of previous session plus 1" in further sessions.
+        */
+
+        let (first_track, last_track) = if let Some(disc) = &self.disc {
+            let first = disc.tracks.first().map(|t| t.track_number).unwrap_or(1);
+            let last = disc.tracks.last().map(|t| t.track_number).unwrap_or(1);
+            (first, last)
+        } else {
+            (1, 1)
+        };
+
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![
+                self.get_status_byte(),
+                decimal_to_bcd(first_track),
+                decimal_to_bcd(last_track),
+            ],
+            3,
+            scheduler,
+        );
+    }
+
+    // 0x14
+    fn cmd_gettd(&mut self, scheduler: &mut Scheduler) {
+        /*
+        GetTD - Command 14h,track --> INT3(stat,mm,ss) ;BCD
+        For a disk with NN tracks, parameter values 01h..NNh return the start of the specified track, parameter value
+        00h returns the end of the last track, and parameter values bigger than NNh return error code 10h. Non-BCD
+        parameter values also return error code 10h.
+        The GetTD values are relative to Index=1 and are rounded down to second boundaries (eg. if track=N Index=0
+        starts at 12:34:56, and Track=N Index=1 starts at 12:36:56, then GetTD(N) will return 12:36, ie. the sector
+        number is truncated, and the Index=0 region is skipped).
+        */
+
+        let track_bcd = self.command_args.get(0).copied().unwrap_or(0);
+        let track_dec = bcd_to_decimal(track_bcd);
+
+        let Some(disc) = &self.disc else {
+            self.schedule_event(
+                cdrom_timing::DEFAULT_FIRST,
+                vec![self.get_status_byte(), 0x10],
+                5,
+                scheduler,
+            );
+            return;
+        };
+
+        // Reject non-BCD values
+        if decimal_to_bcd(track_dec) != track_bcd {
+            self.schedule_event(
+                cdrom_timing::DEFAULT_FIRST,
+                vec![self.get_status_byte(), 0x10],
+                5,
+                scheduler,
+            );
+            return;
+        }
+
+        // Track 00h = end of last track
+        let lba = if track_dec == 0 {
+            let Some(last_track) = disc.tracks.last() else {
+                self.schedule_event(
+                    cdrom_timing::DEFAULT_FIRST,
+                    vec![self.get_status_byte(), 0x10],
+                    5,
+                    scheduler,
+                );
+                return;
+            };
+
+            // Calculate end of disk
+            let end_lba = if let Some(next_track) = disc
+                .tracks
+                .iter()
+                .find(|t| t.start_logical_block > last_track.start_logical_block)
+            {
+                next_track.start_logical_block.saturating_sub(1)
+            } else {
+                let file = &disc.file[last_track.file_index];
+                let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
+                let sector_count = (file_size / SECTOR_SIZE as u64) as u32;
+                last_track
+                    .start_logical_block
+                    .saturating_add(sector_count.saturating_sub(1))
+            };
+
+            end_lba
+        } else {
+            let Some(track) = disc.tracks.iter().find(|t| t.track_number == track_dec) else {
+                self.schedule_event(
+                    cdrom_timing::DEFAULT_FIRST,
+                    vec![self.get_status_byte(), 0x10],
+                    5,
+                    scheduler,
+                );
+                return;
+            };
+            track.start_logical_block
+        };
+
+        let (mm, ss) = lba_to_msf_bcd(lba);
+
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![self.get_status_byte(), mm, ss],
             3,
             scheduler,
         );
@@ -916,11 +1313,11 @@ impl CdRom {
         // Either seeking, reading or none: cant do both! need to error that first
         if self.seek_target.is_some() {
             status |= 1 << 6; // Seeking
-        } else if self.reading {
+        } else if self.reading || self.playing {
             status |= 1 << 5; // Reading
         }
 
-        if self.seek_target.is_some() && self.reading {
+        if self.seek_target.is_some() && (self.reading || self.playing) {
             panic!("CD-ROM cannot be seeking and reading at the same time");
         }
 

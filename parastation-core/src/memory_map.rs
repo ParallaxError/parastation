@@ -83,10 +83,6 @@ pub const SPU_REGISTERS: Range = Range {
     start: 0x1F80_1C00,
     end: 0x1F80_1E80,
 };
-pub const IO_PORTS: Range = Range {
-    start: 0x1F80_1000,
-    end: 0x1F80_2000,
-};
 
 // Expansion region 2: Contains serial port
 pub const EXP2: Range = Range {

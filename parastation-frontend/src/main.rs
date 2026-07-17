@@ -3,6 +3,8 @@ mod opengl_backend;
 use opengl_backend::OpenGlBackend;
 mod keyboard_input_provider;
 use keyboard_input_provider::*;
+mod wav_backend;
+use wav_backend::WavDumpBackend;
 
 use std::env;
 use std::time::{Duration, Instant};
@@ -105,31 +107,37 @@ fn main() {
 
     // Finally, create the backend
     let backend = Box::new(OpenGlBackend::new(gl));
+    let spu_backend = Box::new(WavDumpBackend::new("output.wav"));
     let mut ps1 = Ps1::new(
         bios,
         Interpreter::new(),
         backend,
+        spu_backend,
         Box::new(keyboard_input_provider),
         Box::new(DummyInputProvider),
     );
 
     // Insert disk
-    ps1.insert_cdrom_disc(r"games\Ridge Racer\Ridge Racer.cue");
-    // ps1.insert_cdrom_disc("tests\\nolibgs_hello_worlds\\hello_cd\\hello_cd.cue");
+    // ps1.insert_cdrom_disc(r"games\Battle Arena Toshinden\Battle Arena Toshinden.cue");
+    ps1.insert_cdrom_disc(r"tests\nolibgs_hello_worlds\hello_xa\hello_xa.cue");
 
     // Run some bios
     ps1.run_until_pc(0x80030000);
 
     // Load test exe
-    let exe_data = std::fs::read(r"tests\gpu\clipping\clipping.exe").unwrap_or_else(|e| {
-        eprintln!("Failed to load psxtest_cpu.exe: {e}");
-        std::process::exit(1);
-    });
-    // ps1.load_exe(&exe_data);
+    let exe_data = std::fs::read(r"tests\nolibgs_hello_worlds\hello_xa\hello_xa.ps-exe")
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to load psxtest_cpu.exe: {e}");
+            std::process::exit(1);
+        });
+    ps1.load_exe(&exe_data);
 
     // Only call display at a set FPS
     let frame_duration = Duration::from_secs_f64(1.0 / 60.0);
     let mut last_display = Instant::now();
+
+    let cycles_per_call = 564480;
+    let ps1_time_per_call = Duration::from_secs_f64(cycles_per_call as f64 / 33_868_800.0);
 
     // Run PS1
     event_loop
@@ -138,12 +146,14 @@ fn main() {
 
             match event {
                 Event::AboutToWait => {
-                    ps1.run(33000);
+                    ps1.run(cycles_per_call);
                     if last_display.elapsed() >= frame_duration {
                         ps1.display();
                         gl_surface.swap_buffers(&gl_context).unwrap();
                         last_display = Instant::now();
                     }
+
+                    // elwt.set_control_flow(ControlFlow::WaitUntil(Instant::now() + ps1_time_per_call));
                 }
                 Event::WindowEvent {
                     event: WindowEvent::CloseRequested,

@@ -23,8 +23,10 @@ mod ram;
 mod scheduler;
 mod scratchpad;
 pub mod sio0;
+pub mod spu;
 mod system_bus;
 mod timers;
+mod xadpcm;
 
 pub use backend::Backend;
 pub use bios::Bios;
@@ -32,9 +34,11 @@ use cpu::{Cpu, MipsRegister};
 pub use gpu::GpuBackend;
 pub use interpreter::Interpreter;
 pub use sio0::InputProvider;
+pub use spu::SpuBackend;
 use system_bus::SystemBus;
 
 const VBLANK_CYCLES: u64 = 564480; // Number of cycles between VBlank interrupts
+const SPU_CYCLES: u64 = 768; // Number of cycles between SPU ticks (44.1kHz)
 
 /// Top-level PS1 struct, encapsulating the entire emulator state (CPU, memory, etc.)
 pub struct Ps1<B: Backend> {
@@ -48,12 +52,13 @@ impl<B: Backend> Ps1<B> {
         bios: Bios,
         instruction_backend: B,
         gpu_backend: Box<dyn GpuBackend>,
+        spu_backend: Box<dyn SpuBackend>,
         joy1: Box<dyn InputProvider>,
         joy2: Box<dyn InputProvider>,
     ) -> Self {
         Self {
             cpu: Cpu::new(),
-            bus: SystemBus::new(bios, gpu_backend, joy1, joy2),
+            bus: SystemBus::new(bios, gpu_backend, spu_backend, joy1, joy2),
             backend: instruction_backend,
         }
     }
