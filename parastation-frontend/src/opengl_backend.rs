@@ -36,6 +36,24 @@ struct VramReadTransfer {
     cursor: usize,    // index into pixels of the next pixel to return
 }
 
+// Structs for caching uniform locations for each shader program, to avoid repeated glGetUniformLocation calls
+struct TexturedUniforms {
+    vram: Option<glow::UniformLocation>,
+    is_semi_transparent: Option<glow::UniformLocation>,
+    is_raw_texture: Option<glow::UniformLocation>,
+    tex_page: Option<glow::UniformLocation>,
+    tex_window: Option<glow::UniformLocation>,
+    tex_depth: Option<glow::UniformLocation>,
+}
+
+struct PresentUniforms {
+    vram: Option<glow::UniformLocation>,
+    display_origin: Option<glow::UniformLocation>,
+    display_size: Option<glow::UniformLocation>,
+    screen_offset: Option<glow::UniformLocation>,
+    screen_size: Option<glow::UniformLocation>,
+}
+
 pub struct OpenGlBackend {
     gl: Context,
     // 1024 * 512 R16UI texture on the GPU
@@ -60,6 +78,10 @@ pub struct OpenGlBackend {
     // VRAM transfer
     vram_transfer: Option<VramTransfer>,
     vram_read_transfer: Option<VramReadTransfer>,
+
+    // Cached uniforms
+    textured_uniforms: TexturedUniforms,
+    present_uniforms: PresentUniforms,
 }
 
 unsafe fn compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str) -> glow::Program {
@@ -106,6 +128,8 @@ unsafe fn compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str) ->
 }
 
 unsafe fn check_gl_errors(gl: &glow::Context, label: &str) {
+    // Ignore gl_errors for now... this DESTROYS performance
+    return;
     unsafe {
         loop {
             let err = gl.get_error();
@@ -228,6 +252,25 @@ impl OpenGlBackend {
 
             check_gl_errors(&gl, "OpenGlBackend::new");
 
+            // Finally uniform locations, cached for performance
+            let textured_uniforms = TexturedUniforms {
+                vram: gl.get_uniform_location(textured_program, "vram"),
+                is_semi_transparent: gl
+                    .get_uniform_location(textured_program, "is_semi_transparent"),
+                is_raw_texture: gl.get_uniform_location(textured_program, "is_raw_texture"),
+                tex_page: gl.get_uniform_location(textured_program, "tex_page"),
+                tex_window: gl.get_uniform_location(textured_program, "tex_window"),
+                tex_depth: gl.get_uniform_location(textured_program, "tex_depth"),
+            };
+
+            let present_uniforms = PresentUniforms {
+                vram: gl.get_uniform_location(present_program, "vram"),
+                display_origin: gl.get_uniform_location(present_program, "display_origin"),
+                display_size: gl.get_uniform_location(present_program, "display_size"),
+                screen_offset: gl.get_uniform_location(present_program, "screen_offset"),
+                screen_size: gl.get_uniform_location(present_program, "screen_size"),
+            };
+
             Self {
                 gl,
                 vram_texture,
@@ -244,6 +287,8 @@ impl OpenGlBackend {
                 window_height: 512,
                 vram_transfer: None,
                 vram_read_transfer: None,
+                textured_uniforms,
+                present_uniforms,
             }
         }
     }
@@ -415,7 +460,6 @@ impl OpenGlBackend {
                 .bind_framebuffer(glow::FRAMEBUFFER, Some(self.vram_framebuffer));
             self.gl.viewport(0, 0, 1024, 512);
 
-            // Scissor clip to drawing area
             self.gl.enable(glow::SCISSOR_TEST);
             self.gl.scissor(
                 drawing_area.x1 as i32,
@@ -429,39 +473,24 @@ impl OpenGlBackend {
             self.gl.active_texture(glow::TEXTURE0);
             self.gl
                 .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
-            self.gl.uniform_1_i32(
-                self.gl
-                    .get_uniform_location(self.textured_program, "vram")
-                    .as_ref(),
-                0,
-            );
+            self.gl
+                .uniform_1_i32(self.textured_uniforms.vram.as_ref(), 0);
 
             self.gl.uniform_1_i32(
-                self.gl
-                    .get_uniform_location(self.textured_program, "is_semi_transparent")
-                    .as_ref(),
+                self.textured_uniforms.is_semi_transparent.as_ref(),
                 semi_transparent as i32,
             );
 
             self.gl.uniform_1_i32(
-                self.gl
-                    .get_uniform_location(self.textured_program, "is_raw_texture")
-                    .as_ref(),
+                self.textured_uniforms.is_raw_texture.as_ref(),
                 raw_texture as i32,
             );
 
-            self.gl.uniform_2_f32(
-                self.gl
-                    .get_uniform_location(self.textured_program, "tex_page")
-                    .as_ref(),
-                tex_x,
-                tex_y,
-            );
+            self.gl
+                .uniform_2_f32(self.textured_uniforms.tex_page.as_ref(), tex_x, tex_y);
 
             self.gl.uniform_4_f32(
-                self.gl
-                    .get_uniform_location(self.textured_program, "tex_window")
-                    .as_ref(),
+                self.textured_uniforms.tex_window.as_ref(),
                 (texture_window.texture_window_mask_x as f32) * 8.0,
                 (texture_window.texture_window_mask_y as f32) * 8.0,
                 (texture_window.texture_window_offset_x as f32) * 8.0,
@@ -475,12 +504,8 @@ impl OpenGlBackend {
             self.gl
                 .buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STREAM_DRAW);
 
-            self.gl.uniform_1_i32(
-                self.gl
-                    .get_uniform_location(self.textured_program, "tex_depth")
-                    .as_ref(),
-                tex_depth,
-            );
+            self.gl
+                .uniform_1_i32(self.textured_uniforms.tex_depth.as_ref(), tex_depth);
 
             self.gl.disable(glow::DEPTH_TEST);
             self.gl.disable(glow::CULL_FACE);
@@ -1038,22 +1063,25 @@ impl GpuBackend for OpenGlBackend {
             self.gl
                 .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
 
-            let loc = |name| self.gl.get_uniform_location(self.present_program, name);
-            self.gl.uniform_1_i32(loc("vram").as_ref(), 0);
+            self.gl
+                .uniform_1_i32(self.present_uniforms.vram.as_ref(), 0);
             self.gl.uniform_2_f32(
-                loc("display_origin").as_ref(),
+                self.present_uniforms.display_origin.as_ref(),
                 vram_x as f32 / 1024.0,
                 vram_y as f32 / 512.0,
             );
             self.gl.uniform_2_f32(
-                loc("display_size").as_ref(),
+                self.present_uniforms.display_size.as_ref(),
                 w as f32 / 1024.0,
                 h as f32 / 512.0,
             );
+            self.gl.uniform_2_f32(
+                self.present_uniforms.screen_offset.as_ref(),
+                ndc_x,
+                ndc_y - ndc_h,
+            );
             self.gl
-                .uniform_2_f32(loc("screen_offset").as_ref(), ndc_x, ndc_y - ndc_h);
-            self.gl
-                .uniform_2_f32(loc("screen_size").as_ref(), ndc_w, ndc_h);
+                .uniform_2_f32(self.present_uniforms.screen_size.as_ref(), ndc_w, ndc_h);
 
             self.gl.bind_vertex_array(Some(self.present_vao));
             self.gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);

@@ -105,14 +105,16 @@ impl<B: Backend> Ps1<B> {
     }
 
     fn step(&mut self) {
-        self.bus.tick(2);
         self.backend.step(&mut self.cpu, &mut self.bus);
     }
 
     /// Run the emulator for a given number of cycles.
     pub fn run(&mut self, cycles: u64) {
-        for _ in 0..cycles {
+        let mut remaining = cycles;
+        while remaining > 0 {
+            self.bus.tick(2);
             self.step();
+            remaining = remaining.saturating_sub(2);
         }
     }
 
