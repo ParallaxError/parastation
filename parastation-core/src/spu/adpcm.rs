@@ -67,7 +67,10 @@ impl AdpcmDecoder {
         filter =      (src[4+blk*2+nibble] AND 30h) SHR 4
         */
         let shift = 12 - (block[0] & 0x0F);
-        let filter = (block[0] & 0x30) >> 4;
+        let mut filter = (block[0] >> 4) & 0x07; // Different from psx-spx pseudocode since SPU has 5 filters
+        if filter > 4 {
+            filter = 4; // Only 5 filters are valid, so clamp to 4 if out of range
+        }
 
         // Finally the decoding logic just follows the psx-spx pseudocode
         /*
