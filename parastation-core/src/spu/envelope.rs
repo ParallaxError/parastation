@@ -210,7 +210,7 @@ pub struct AdsrEnvelope {
     attack_shift: u8,
     attack_step: u8,
     decay_shift: u8,
-    sustain_level: i16,
+    sustain_level: u16,
     sustain_mode_exponential: bool,
     sustain_direction_decrease: bool,
     sustain_shift: u8,
@@ -311,7 +311,7 @@ impl AdsrEnvelope {
         self.attack_shift = ((config_low >> 10) & 0x1F) as u8;
         self.attack_step = ((config_low >> 8) & 0x03) as u8;
         self.decay_shift = ((config_low >> 4) & 0x0F) as u8;
-        self.sustain_level = ((config_low & 0x0F) as i16 + 1) * 0x800; // Convert to 16 bit level
+        self.sustain_level = ((config_low & 0x0F) as u16 + 1) << 11; // Shift by 11 as per psx-spx: "Level=(N+1)*800h"
     }
 
     pub fn write_config_high(&mut self, config_high: u16) {
@@ -403,7 +403,7 @@ impl AdsrEnvelope {
         if self.phase == AdsrPhase::Attack && self.level == 0x7FFF {
             self.phase = AdsrPhase::Decay;
         }
-        if self.phase == AdsrPhase::Decay && self.level <= self.sustain_level {
+        if self.phase == AdsrPhase::Decay && self.level as i32 <= self.sustain_level as i32 {
             self.phase = AdsrPhase::Sustain;
         }
 
