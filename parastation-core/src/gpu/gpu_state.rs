@@ -107,6 +107,12 @@ impl DrawingArea {
     }
 }
 
+// Helper for parsing drawing offset
+fn sign_extend(value: u32, bits: u32) -> i32 {
+    let shift = 32 - bits;
+    ((value << shift) as i32) >> shift
+}
+
 /// Drawing offset set by GP0(E5h)
 #[derive(Debug, Clone, Default)]
 pub struct DrawingOffset {
@@ -123,8 +129,8 @@ impl DrawingOffset {
         24-31  Command  (E5h)
         */
         Self {
-            x: ((command as i32) << 22 >> 22) as i16,
-            y: (((command >> 11) as i32) << 21 >> 21) as i16,
+            x: sign_extend(command, 11) as i16,
+            y: sign_extend(command >> 11, 11) as i16,
         }
     }
 }

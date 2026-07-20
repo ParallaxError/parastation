@@ -37,6 +37,10 @@ struct VramReadTransfer {
 }
 
 // Structs for caching uniform locations for each shader program, to avoid repeated glGetUniformLocation calls
+struct FlatUniforms {
+    drawing_offset: Option<glow::UniformLocation>,
+}
+
 struct TexturedUniforms {
     vram: Option<glow::UniformLocation>,
     is_semi_transparent: Option<glow::UniformLocation>,
@@ -44,6 +48,7 @@ struct TexturedUniforms {
     tex_page: Option<glow::UniformLocation>,
     tex_window: Option<glow::UniformLocation>,
     tex_depth: Option<glow::UniformLocation>,
+    drawing_offset: Option<glow::UniformLocation>,
 }
 
 struct PresentUniforms {
@@ -80,6 +85,7 @@ pub struct OpenGlBackend {
     vram_read_transfer: Option<VramReadTransfer>,
 
     // Cached uniforms
+    flat_uniforms: FlatUniforms,
     textured_uniforms: TexturedUniforms,
     present_uniforms: PresentUniforms,
 }
@@ -253,6 +259,10 @@ impl OpenGlBackend {
             check_gl_errors(&gl, "OpenGlBackend::new");
 
             // Finally uniform locations, cached for performance
+            let flat_uniforms = FlatUniforms {
+                drawing_offset: gl.get_uniform_location(flat_program, "drawing_offset"),
+            };
+
             let textured_uniforms = TexturedUniforms {
                 vram: gl.get_uniform_location(textured_program, "vram"),
                 is_semi_transparent: gl
@@ -261,6 +271,7 @@ impl OpenGlBackend {
                 tex_page: gl.get_uniform_location(textured_program, "tex_page"),
                 tex_window: gl.get_uniform_location(textured_program, "tex_window"),
                 tex_depth: gl.get_uniform_location(textured_program, "tex_depth"),
+                drawing_offset: gl.get_uniform_location(textured_program, "drawing_offset"),
             };
 
             let present_uniforms = PresentUniforms {
@@ -287,6 +298,7 @@ impl OpenGlBackend {
                 window_height: 512,
                 vram_transfer: None,
                 vram_read_transfer: None,
+                flat_uniforms,
                 textured_uniforms,
                 present_uniforms,
             }
@@ -339,7 +351,13 @@ unsafe impl bytemuck::Pod for TexturedGlVertex {}
 unsafe impl bytemuck::Zeroable for TexturedGlVertex {}
 
 impl OpenGlBackend {
-    fn submit_flat(&mut self, verts: &[FlatGlVertex], mode: u32, drawing_area: &DrawingArea) {
+    fn submit_flat(
+        &mut self,
+        verts: &[FlatGlVertex],
+        mode: u32,
+        drawing_area: &DrawingArea,
+        drawing_offset: &DrawingOffset,
+    ) {
         unsafe {
             self.gl
                 .bind_framebuffer(glow::FRAMEBUFFER, Some(self.vram_framebuffer));
@@ -356,6 +374,12 @@ impl OpenGlBackend {
 
             self.gl.use_program(Some(self.flat_program));
             self.gl.bind_vertex_array(Some(self.vertex_array));
+
+            self.gl.uniform_2_f32(
+                self.flat_uniforms.drawing_offset.as_ref(),
+                drawing_offset.x as f32,
+                drawing_offset.y as f32,
+            );
 
             // Upload vertex data to GPU
             self.gl
@@ -378,17 +402,14 @@ impl OpenGlBackend {
         _semi_transparent: bool,
         params: &DrawParams,
     ) {
-        let ox = params.drawing_offset.x;
-        let oy = params.drawing_offset.y;
-
         self.submit_flat(
             &[
-                FlatGlVertex::new(v0.vertex.x + ox, v0.vertex.y + oy, colour),
-                FlatGlVertex::new(v1.vertex.x + ox, v1.vertex.y + oy, colour),
-                FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, colour),
+                FlatGlVertex::new(v0.vertex.x, v0.vertex.y, colour),
+                FlatGlVertex::new(v1.vertex.x, v1.vertex.y, colour),
+                FlatGlVertex::new(v2.vertex.x, v2.vertex.y, colour),
             ],
             glow::TRIANGLES,
-            &params.drawing_area,
+            &params.drawing_area, &params.drawing_offset
         );
     }
 
@@ -400,17 +421,14 @@ impl OpenGlBackend {
         _semi_transparent: bool,
         params: &DrawParams,
     ) {
-        let ox = params.drawing_offset.x;
-        let oy = params.drawing_offset.y;
-
         self.submit_flat(
             &[
-                FlatGlVertex::new(v0.vertex.x + ox, v0.vertex.y + oy, v0.colour),
-                FlatGlVertex::new(v1.vertex.x + ox, v1.vertex.y + oy, v1.colour),
-                FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, v2.colour),
+                FlatGlVertex::new(v0.vertex.x, v0.vertex.y, v0.colour),
+                FlatGlVertex::new(v1.vertex.x, v1.vertex.y, v1.colour),
+                FlatGlVertex::new(v2.vertex.x, v2.vertex.y, v2.colour),
             ],
             glow::TRIANGLES,
-            &params.drawing_area,
+            &params.drawing_area, &params.drawing_offset
         );
     }
 
@@ -424,21 +442,18 @@ impl OpenGlBackend {
         _semi_transparent: bool,
         params: &DrawParams,
     ) {
-        let ox = params.drawing_offset.x;
-        let oy = params.drawing_offset.y;
-
         // PS1 splits quads as (v0,v1,v2) and (v1,v2,v3)
         self.submit_flat(
             &[
-                FlatGlVertex::new(v0.vertex.x + ox, v0.vertex.y + oy, colour),
-                FlatGlVertex::new(v1.vertex.x + ox, v1.vertex.y + oy, colour),
-                FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, colour),
-                FlatGlVertex::new(v1.vertex.x + ox, v1.vertex.y + oy, colour),
-                FlatGlVertex::new(v2.vertex.x + ox, v2.vertex.y + oy, colour),
-                FlatGlVertex::new(v3.vertex.x + ox, v3.vertex.y + oy, colour),
+                FlatGlVertex::new(v0.vertex.x, v0.vertex.y, colour),
+                FlatGlVertex::new(v1.vertex.x, v1.vertex.y, colour),
+                FlatGlVertex::new(v2.vertex.x, v2.vertex.y, colour),
+                FlatGlVertex::new(v1.vertex.x, v1.vertex.y, colour),
+                FlatGlVertex::new(v2.vertex.x, v2.vertex.y, colour),
+                FlatGlVertex::new(v3.vertex.x, v3.vertex.y, colour),
             ],
             glow::TRIANGLES,
-            &params.drawing_area,
+            &params.drawing_area, &params.drawing_offset
         );
     }
 
@@ -454,6 +469,7 @@ impl OpenGlBackend {
         semi_transparency_mode: u8,
         texture_window: &TextureWindow,
         drawing_area: &DrawingArea,
+        drawing_offset: &DrawingOffset,
     ) {
         unsafe {
             self.gl
@@ -497,6 +513,12 @@ impl OpenGlBackend {
                 (texture_window.texture_window_offset_y as f32) * 8.0,
             );
 
+            self.gl.uniform_2_f32(
+                self.textured_uniforms.drawing_offset.as_ref(),
+                drawing_offset.x as f32,
+                drawing_offset.y as f32,
+            );
+
             self.gl.bind_vertex_array(Some(self.textured_vertex_array));
             self.gl
                 .bind_buffer(glow::ARRAY_BUFFER, Some(self.textured_vertex_buffer));
@@ -529,9 +551,6 @@ impl OpenGlBackend {
         semi_transparent: bool,
         params: &DrawParams,
     ) {
-        let ox = params.drawing_offset.x;
-        let oy = params.drawing_offset.y;
-
         // Texpage offset in VRAM pixels
         let tex_x = (texture_params.tex_page.x as f32) * 64.0;
         let tex_y = if texture_params.tex_page.y {
@@ -542,8 +561,8 @@ impl OpenGlBackend {
 
         // For each vertex lets make a quick func to convert it
         let make_vert = |v: TexturedVertex| TexturedGlVertex {
-            x: (v.vertex.x + ox) as f32,
-            y: (v.vertex.y + oy) as f32,
+            x: v.vertex.x as f32,
+            y: v.vertex.y as f32,
             r: colour.r as f32,
             g: colour.g as f32,
             b: colour.b as f32,
@@ -565,7 +584,7 @@ impl OpenGlBackend {
             texture_params.raw_texture,
             texture_params.tex_page.semi_transparency,
             &params.texture_window,
-            &params.drawing_area,
+            &params.drawing_area, &params.drawing_offset
         );
     }
 
@@ -578,9 +597,6 @@ impl OpenGlBackend {
         semi_transparent: bool,
         params: &DrawParams,
     ) {
-        let ox = params.drawing_offset.x;
-        let oy = params.drawing_offset.y;
-
         // Texpage offset in VRAM pixels
         let tex_x = (texture_params.tex_page.x as f32) * 64.0;
         let tex_y = if texture_params.tex_page.y {
@@ -591,8 +607,8 @@ impl OpenGlBackend {
 
         // For each vertex lets make a quick func to convert it
         let make_vert = |v: ShadedTexturedVertex| TexturedGlVertex {
-            x: (v.vertex.x + ox) as f32,
-            y: (v.vertex.y + oy) as f32,
+            x: v.vertex.x as f32,
+            y: v.vertex.y as f32,
             r: v.colour.r as f32,
             g: v.colour.g as f32,
             b: v.colour.b as f32,
@@ -614,7 +630,7 @@ impl OpenGlBackend {
             texture_params.raw_texture,
             texture_params.tex_page.semi_transparency,
             &params.texture_window,
-            &params.drawing_area,
+            &params.drawing_area, &params.drawing_offset
         );
     }
 
@@ -635,9 +651,6 @@ impl OpenGlBackend {
         let tex_x = mode.texture_base_x as f32 * 64.0;
         let tex_y = if mode.texture_base_y { 256.0 } else { 0.0 };
         let tex_depth = mode.texture_page_colours as i32;
-
-        let ox = params.drawing_offset.x;
-        let oy = params.drawing_offset.y;
 
         let u0 = texcoord.u as f32;
         let v0 = texcoord.v as f32;
@@ -662,8 +675,8 @@ impl OpenGlBackend {
         let y1 = y0 + size_h;
 
         let make_vert = |x: i16, y: i16, u: f32, v: f32| TexturedGlVertex {
-            x: (x + ox) as f32,
-            y: (y + oy) as f32,
+            x: x as f32,
+            y: y as f32,
             r: colour.r as f32,
             g: colour.g as f32,
             b: colour.b as f32,
@@ -693,6 +706,7 @@ impl OpenGlBackend {
             mode.semi_transparency,
             &params.texture_window,
             &params.drawing_area,
+            &params.drawing_offset,
         );
     }
 }
@@ -838,6 +852,7 @@ impl GpuBackend for OpenGlBackend {
             x2: 1024,
             y2: 512,
         };
+        let drawing_offset = DrawingOffset { x: 0, y: 0 };
         self.submit_flat(
             &[
                 flat(x0, y0),
@@ -849,6 +864,7 @@ impl GpuBackend for OpenGlBackend {
             ],
             glow::TRIANGLES,
             &drawing_area,
+            &drawing_offset,
         );
     }
 
@@ -1022,49 +1038,39 @@ impl GpuBackend for OpenGlBackend {
         // let h = 512;
         unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-
-            // Disable scissor for present
             self.gl.disable(glow::SCISSOR_TEST);
 
-            // Get actual window size
             let win_w = self.window_width as f32;
             let win_h = self.window_height as f32;
 
-            // Compute letterbox fit for the VRAM rectangle in the window, preserving aspect ratio
-            let src_aspect = w as f32 / h as f32;
+            // We want to scale the 4:3 PS1 output to fit the window, while maintaining aspect ratio
+            let target_aspect = 4.0 / 3.0;
             let win_aspect = win_w / win_h;
 
-            let (dest_w, dest_h, dest_x, dest_y) = if win_aspect > src_aspect {
-                // Window is wider, bars on each side
-                let scaled_w = win_h * src_aspect;
+            let (dest_w, dest_h, dest_x, dest_y) = if win_aspect > target_aspect {
+                let scaled_w = win_h * target_aspect;
                 let x_offset = (win_w - scaled_w) / 2.0;
                 (scaled_w, win_h, x_offset, 0.0)
             } else {
-                // Window is taller, bars on top and bottom
-                let scaled_h = win_w / src_aspect;
+                let scaled_h = win_w / target_aspect;
                 let y_offset = (win_h - scaled_h) / 2.0;
                 (win_w, scaled_h, 0.0, y_offset)
             };
 
-            // Set viewport to full window, clear to black
-            self.gl
-                .viewport(0, 0, self.window_width as i32, self.window_height as i32);
+            self.gl.viewport(0, 0, self.window_width as i32, self.window_height as i32);
             self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
             self.gl.clear(glow::COLOR_BUFFER_BIT);
 
-            // convert pixel coords to NDC
             let ndc_x = (dest_x / win_w) * 2.0 - 1.0;
-            let ndc_y = 1.0 - (dest_y / win_h) * 2.0; // flip Y
+            let ndc_y = 1.0 - (dest_y / win_h) * 2.0;
             let ndc_w = (dest_w / win_w) * 2.0;
             let ndc_h = (dest_h / win_h) * 2.0;
 
             self.gl.use_program(Some(self.present_program));
             self.gl.active_texture(glow::TEXTURE0);
-            self.gl
-                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
 
-            self.gl
-                .uniform_1_i32(self.present_uniforms.vram.as_ref(), 0);
+            self.gl.uniform_1_i32(self.present_uniforms.vram.as_ref(), 0);
             self.gl.uniform_2_f32(
                 self.present_uniforms.display_origin.as_ref(),
                 vram_x as f32 / 1024.0,
@@ -1075,13 +1081,8 @@ impl GpuBackend for OpenGlBackend {
                 w as f32 / 1024.0,
                 h as f32 / 512.0,
             );
-            self.gl.uniform_2_f32(
-                self.present_uniforms.screen_offset.as_ref(),
-                ndc_x,
-                ndc_y - ndc_h,
-            );
-            self.gl
-                .uniform_2_f32(self.present_uniforms.screen_size.as_ref(), ndc_w, ndc_h);
+            self.gl.uniform_2_f32(self.present_uniforms.screen_offset.as_ref(), ndc_x, ndc_y - ndc_h);
+            self.gl.uniform_2_f32(self.present_uniforms.screen_size.as_ref(), ndc_w, ndc_h);
 
             self.gl.bind_vertex_array(Some(self.present_vao));
             self.gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);

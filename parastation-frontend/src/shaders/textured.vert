@@ -5,13 +5,17 @@ layout(location = 1) in vec3 colour;
 layout(location = 2) in vec2 texcoord;   // UV in texture page
 layout(location = 3) in vec2 clut_coord; // CLUT location in VRAM
 
+uniform vec2 drawing_offset;
+
 out vec3 frag_colour;
 out vec2 frag_texcoord;
 out vec2 frag_clut;
 
 void main() {
-    vec2 ndc = (position / vec2(1024.0, 512.0)) * 2.0 - 1.0;
-    // ndc.y = -ndc.y;
+    // vec2 vram_pos = mod(position + drawing_offset, vec2(1024.0, 512.0));
+    vec2 vram_pos = position + drawing_offset;
+
+    vec2 ndc = (vram_pos / vec2(1024.0, 512.0)) * 2.0 - 1.0;
     gl_Position = vec4(ndc, 0.0, 1.0);
     frag_colour = colour;
     frag_texcoord = texcoord;
