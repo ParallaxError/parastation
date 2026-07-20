@@ -405,7 +405,12 @@ impl DmaController {
         offset % 0x10 == 8 && offset <= 0x68
     }
 
-    pub fn write_register(&mut self, offset: u32, value: u32, interrupt_controller: &mut InterruptController) {
+    pub fn write_register(
+        &mut self,
+        offset: u32,
+        value: u32,
+        interrupt_controller: &mut InterruptController,
+    ) {
         match offset {
             0x00..=0x60 if offset % 0x10 == 0 => {
                 let channel = offset / 0x10;

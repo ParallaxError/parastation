@@ -409,7 +409,8 @@ impl OpenGlBackend {
                 FlatGlVertex::new(v2.vertex.x, v2.vertex.y, colour),
             ],
             glow::TRIANGLES,
-            &params.drawing_area, &params.drawing_offset
+            &params.drawing_area,
+            &params.drawing_offset,
         );
     }
 
@@ -428,7 +429,8 @@ impl OpenGlBackend {
                 FlatGlVertex::new(v2.vertex.x, v2.vertex.y, v2.colour),
             ],
             glow::TRIANGLES,
-            &params.drawing_area, &params.drawing_offset
+            &params.drawing_area,
+            &params.drawing_offset,
         );
     }
 
@@ -453,7 +455,8 @@ impl OpenGlBackend {
                 FlatGlVertex::new(v3.vertex.x, v3.vertex.y, colour),
             ],
             glow::TRIANGLES,
-            &params.drawing_area, &params.drawing_offset
+            &params.drawing_area,
+            &params.drawing_offset,
         );
     }
 
@@ -584,7 +587,8 @@ impl OpenGlBackend {
             texture_params.raw_texture,
             texture_params.tex_page.semi_transparency,
             &params.texture_window,
-            &params.drawing_area, &params.drawing_offset
+            &params.drawing_area,
+            &params.drawing_offset,
         );
     }
 
@@ -630,7 +634,8 @@ impl OpenGlBackend {
             texture_params.raw_texture,
             texture_params.tex_page.semi_transparency,
             &params.texture_window,
-            &params.drawing_area, &params.drawing_offset
+            &params.drawing_area,
+            &params.drawing_offset,
         );
     }
 
@@ -1057,7 +1062,8 @@ impl GpuBackend for OpenGlBackend {
                 (win_w, scaled_h, 0.0, y_offset)
             };
 
-            self.gl.viewport(0, 0, self.window_width as i32, self.window_height as i32);
+            self.gl
+                .viewport(0, 0, self.window_width as i32, self.window_height as i32);
             self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
             self.gl.clear(glow::COLOR_BUFFER_BIT);
 
@@ -1068,9 +1074,11 @@ impl GpuBackend for OpenGlBackend {
 
             self.gl.use_program(Some(self.present_program));
             self.gl.active_texture(glow::TEXTURE0);
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
+            self.gl
+                .bind_texture(glow::TEXTURE_2D, Some(self.vram_texture));
 
-            self.gl.uniform_1_i32(self.present_uniforms.vram.as_ref(), 0);
+            self.gl
+                .uniform_1_i32(self.present_uniforms.vram.as_ref(), 0);
             self.gl.uniform_2_f32(
                 self.present_uniforms.display_origin.as_ref(),
                 vram_x as f32 / 1024.0,
@@ -1081,8 +1089,13 @@ impl GpuBackend for OpenGlBackend {
                 w as f32 / 1024.0,
                 h as f32 / 512.0,
             );
-            self.gl.uniform_2_f32(self.present_uniforms.screen_offset.as_ref(), ndc_x, ndc_y - ndc_h);
-            self.gl.uniform_2_f32(self.present_uniforms.screen_size.as_ref(), ndc_w, ndc_h);
+            self.gl.uniform_2_f32(
+                self.present_uniforms.screen_offset.as_ref(),
+                ndc_x,
+                ndc_y - ndc_h,
+            );
+            self.gl
+                .uniform_2_f32(self.present_uniforms.screen_size.as_ref(), ndc_w, ndc_h);
 
             self.gl.bind_vertex_array(Some(self.present_vao));
             self.gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);

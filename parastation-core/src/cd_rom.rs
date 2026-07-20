@@ -841,12 +841,7 @@ impl CdRom {
             cdrom_timing::DEFAULT_FIRST
         };
 
-        self.schedule_event(
-            seek_time,
-            vec![self.get_status_byte()],
-            3,
-            scheduler,
-        );
+        self.schedule_event(seek_time, vec![self.get_status_byte()], 3, scheduler);
 
         let pending_seek = self.seek_target.take();
 
@@ -894,12 +889,7 @@ impl CdRom {
             cdrom_timing::DEFAULT_FIRST
         };
 
-        self.schedule_event(
-            seek_time,
-            vec![self.get_status_byte()],
-            3,
-            scheduler,
-        );
+        self.schedule_event(seek_time, vec![self.get_status_byte()], 3, scheduler);
 
         // Seek to our target if we have one first, no need to call seekl
         if let Some(target) = self.seek_target.take() {
@@ -1233,14 +1223,14 @@ impl CdRom {
     fn cmd_seekp(&mut self, scheduler: &mut Scheduler) {
         /*
         SeekP - Command 16h --> INT3(stat) --> INT2(stat)
-        Seek to Setloc's location in audio mode (using the Subchannel Q position data, which works on both Audio on 
+        Seek to Setloc's location in audio mode (using the Subchannel Q position data, which works on both Audio on
         Data disks).
-        After the seek, the disk stays on the seeked location forever (namely: when seeking sector N, it does stay at 
-        around N-9..N-1 in single speed mode, or at around N-2..N in double speed mode). This command will stop any 
+        After the seek, the disk stays on the seeked location forever (namely: when seeking sector N, it does stay at
+        around N-9..N-1 in single speed mode, or at around N-2..N in double speed mode). This command will stop any
         current or pending ReadN or ReadS.
-        Note: Some older docs claim that SeekP would recurse only "MM:SS" of the "MM:SS:FF" position from Setloc - 
+        Note: Some older docs claim that SeekP would recurse only "MM:SS" of the "MM:SS:FF" position from Setloc -
         that is wrong, it does seek to MM:SS:FF (verified on a PSone).
-        After the seek, status is stat.bit7=0 (ie. audio playback off), until sending a new Play command 
+        After the seek, status is stat.bit7=0 (ie. audio playback off), until sending a new Play command
         (without parameters) to start playback at the seeked location.
         */
 
@@ -1321,7 +1311,7 @@ impl CdRom {
             self.schedule_event(cdrom_timing::GETID_SECOND, response.to_vec(), 5, scheduler); // INT5 for second response
         } else {
             // Disc inserted, respond with Licensed:Mode2
-            let response = [0x02, 0x00, 0x20, 0x00, b'S', b'C', b'E', b'I'];
+            let response = [0x02, 0x00, 0x20, 0x00, b'S', b'C', b'E', b'A'];
             self.schedule_event(cdrom_timing::GETID_SECOND, response.to_vec(), 2, scheduler); // INT2 for second response
         }
     }

@@ -244,7 +244,8 @@ impl SystemBus {
             return self.write_interrupt_control(offset, value as u16);
         }
         if let Some(offset) = DMA_REGISTERS.contains(addr) {
-            self.dma.write_register(offset, value, &mut self.interrupt_controller);
+            self.dma
+                .write_register(offset, value, &mut self.interrupt_controller);
             if DmaController::is_chcr(offset) {
                 self.tick_dma();
             }

@@ -4,7 +4,7 @@
  * Handles the window and GL context creation and main loop for the ParaStation frontend.
  * Attempts to drive the emulation at a fixed framerate using both sleep and busy-waiting (spinning) to avoid dropping
  * frames, and prints a summary of the average framerate and frame time at the end of execution
- * 
+ *
  * -----
  */
 
@@ -27,7 +27,7 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowBuilder};
 
-use crate::keyboard_input_provider::{KeyboardInputProvider, KeyboardState, DummyInputProvider};
+use crate::keyboard_input_provider::{DummyInputProvider, KeyboardInputProvider, KeyboardState};
 use crate::opengl_backend::OpenGlBackend;
 use crate::spu_backend::CpalSpuBackend;
 
@@ -64,10 +64,7 @@ impl Runner {
         }
     }
 
-    pub fn new(
-        event_loop: &EventLoop<()>,
-        bios: Bios    
-    ) -> Self {
+    pub fn new(event_loop: &EventLoop<()>, bios: Bios) -> Self {
         Self::set_high_timer_resolution();
 
         let window_builder = WindowBuilder::new()
@@ -80,7 +77,13 @@ impl Runner {
         let (window, gl_config) = display_builder
             .build(event_loop, template, |configs| {
                 configs
-                    .reduce(|a, b| if a.num_samples() > b.num_samples() { a } else { b })
+                    .reduce(|a, b| {
+                        if a.num_samples() > b.num_samples() {
+                            a
+                        } else {
+                            b
+                        }
+                    })
                     .unwrap()
             })
             .unwrap();
@@ -101,7 +104,9 @@ impl Runner {
         );
 
         let gl_surface = unsafe {
-            display.create_window_surface(&gl_config, &surface_attrs).unwrap()
+            display
+                .create_window_surface(&gl_config, &surface_attrs)
+                .unwrap()
         };
 
         let gl_context = context.make_current(&gl_surface).unwrap();
@@ -150,29 +155,33 @@ impl Runner {
 impl Runner {
     pub fn run(mut self, event_loop: EventLoop<()>) {
         event_loop
-            .run(move |event, elwt| {
-                match event {
-                    Event::AboutToWait => {
-                        self.tick_frame();
-                        elwt.set_control_flow(ControlFlow::Poll);
-                    }
-                    Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                        self.print_session_summary();
-                        elwt.exit();
-                    }
-                    Event::WindowEvent {
-                        event: WindowEvent::KeyboardInput { event: key_event, .. },
-                        ..
-                    } => {
-                        if let PhysicalKey::Code(key_code) = key_event.physical_key {
-                            match key_event.state {
-                                ElementState::Pressed => self.keyboard_state.key_pressed(key_code),
-                                ElementState::Released => self.keyboard_state.key_released(key_code),
-                            }
+            .run(move |event, elwt| match event {
+                Event::AboutToWait => {
+                    self.tick_frame();
+                    elwt.set_control_flow(ControlFlow::Poll);
+                }
+                Event::WindowEvent {
+                    event: WindowEvent::CloseRequested,
+                    ..
+                } => {
+                    self.print_session_summary();
+                    elwt.exit();
+                }
+                Event::WindowEvent {
+                    event:
+                        WindowEvent::KeyboardInput {
+                            event: key_event, ..
+                        },
+                    ..
+                } => {
+                    if let PhysicalKey::Code(key_code) = key_event.physical_key {
+                        match key_event.state {
+                            ElementState::Pressed => self.keyboard_state.key_pressed(key_code),
+                            ElementState::Released => self.keyboard_state.key_released(key_code),
                         }
                     }
-                    _ => (),
                 }
+                _ => (),
             })
             .unwrap();
     }
@@ -207,9 +216,11 @@ impl Runner {
             }
         }
 
-        // Sleep for the majority of the remaining time (cheap for the CPU), but then busy wait for the remaining 
+        // Sleep for the majority of the remaining time (cheap for the CPU), but then busy wait for the remaining
         // duration so that waking up is faster than waiting for Windows, so we can avoid some "slippage" in the FPS
-        let remaining = self.next_frame_time.saturating_duration_since(Instant::now());
+        let remaining = self
+            .next_frame_time
+            .saturating_duration_since(Instant::now());
         if remaining > SPIN_THRESHOLD {
             std::thread::sleep(remaining - SPIN_THRESHOLD);
         }
@@ -244,7 +255,7 @@ impl Runner {
 }
 
 // PS1 exposed methods
-impl Runner { 
+impl Runner {
     pub fn insert_cdrom_disc(&mut self, cue_path: &str) {
         self.ps1.insert_cdrom_disc(cue_path);
     }

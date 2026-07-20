@@ -58,7 +58,12 @@ impl RootCounter {
 
     // Advance the counter by a given number of cycles, returning the new current value and whether the target or the
     // max value boundary was crossed
-    fn advance_one_batch(&self, step: u16, target: u16, reset_on_target: bool) -> (u16, bool, bool) {
+    fn advance_one_batch(
+        &self,
+        step: u16,
+        target: u16,
+        reset_on_target: bool,
+    ) -> (u16, bool, bool) {
         let start = self.current as u32;
         let mut end = start + step as u32;
 

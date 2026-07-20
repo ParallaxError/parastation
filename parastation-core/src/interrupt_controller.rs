@@ -52,7 +52,7 @@ impl InterruptController {
     pub fn raise_interrupt(&mut self, interrupt: Interrupt) {
         self.stat |= 1 << (interrupt as u16);
     }
-    
+
     pub fn pending(&self) -> bool {
         return (self.stat & self.mask) != 0;
     }

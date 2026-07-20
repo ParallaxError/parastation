@@ -7,8 +7,8 @@
  * Will admit, partially vibe coded. Not too interested in learning how cpal works in rust so meh
  */
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 

@@ -3,10 +3,10 @@ mod opengl_backend;
 mod runner;
 mod spu_backend;
 
-use std::env;
 use parastation_core::bios::Bios;
-use winit::event_loop::EventLoop;
 use runner::Runner;
+use std::env;
+use winit::event_loop::EventLoop;
 
 fn main() {
     unsafe {
