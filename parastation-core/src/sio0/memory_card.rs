@@ -245,6 +245,7 @@ impl MemoryCard {
                         }
                     }
                     MemCardReadState::ReceiveMemoryEndByte => {
+                        self.command = MemCardCommand::AwaitingAddress;
                         self.command_state = MemCardCommandState::Idle;
                         (0x47, false) // 'G" for Good'
                     }
@@ -339,6 +340,7 @@ impl MemoryCard {
                     }
                     MemCardWriteState::ReceiveMemoryEndByte => {
                         self.command_state = MemCardCommandState::Idle;
+                        self.command = MemCardCommand::AwaitingAddress;
                         (0x47, false) // 'G" for Good'
                     }
                 }
@@ -425,6 +427,7 @@ impl MemoryCard {
                     }
                     MemCardGetIdState::Receive80h => {
                         if byte == 0x00 {
+                            self.command = MemCardCommand::AwaitingAddress;
                             self.command_state = MemCardCommandState::Idle;
                             (0x80, false)
                         } else {

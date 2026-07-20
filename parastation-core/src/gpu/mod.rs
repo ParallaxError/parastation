@@ -213,6 +213,7 @@ impl Gpu {
             Gp0Command::TexturedQuad => self.draw_textured_quad(),
             Gp0Command::ShadedTri => self.draw_shaded_tri(),
             Gp0Command::ShadedQuad => self.draw_shaded_quad(),
+            Gp0Command::ShadedTexturedTri => self.draw_shaded_textured_tri(),
             Gp0Command::ShadedTexturedQuad => self.draw_shaded_textured_quad(),
 
             Gp0Command::VariableMonochromeRectangle => self.draw_variable_monochrome_rectangle(),

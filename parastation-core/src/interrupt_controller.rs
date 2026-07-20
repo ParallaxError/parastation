@@ -7,7 +7,7 @@
  */
 
 /// A hardware interrupt type, corresponding to a bit in the I_STAT and I_MASK registers of the interrupt
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Interrupt {
     VBlank = 0x0,     // Vertical blank interrupt
     GPU = 0x1,        // GPU interrupt
@@ -24,8 +24,8 @@ pub enum Interrupt {
 
 /// Interrupt controller struct, holding the relevant registers and methods for handling interrupts
 pub struct InterruptController {
-    pub stat: u16, // I_STAT: pending interrupts
-    pub mask: u16, // I_MASK: enabled interrupts
+    stat: u16, // I_STAT: pending interrupts
+    mask: u16, // I_MASK: enabled interrupts
 }
 
 impl InterruptController {
@@ -36,18 +36,23 @@ impl InterruptController {
     pub fn read_stat(&self) -> u32 {
         self.stat as u32
     }
+
     pub fn read_mask(&self) -> u32 {
         self.mask as u32
     }
+
     pub fn write_stat(&mut self, value: u16) {
         self.stat &= value;
     }
+
     pub fn write_mask(&mut self, value: u16) {
         self.mask = value;
     }
+
     pub fn raise_interrupt(&mut self, interrupt: Interrupt) {
         self.stat |= 1 << (interrupt as u16);
     }
+    
     pub fn pending(&self) -> bool {
         return (self.stat & self.mask) != 0;
     }

@@ -58,11 +58,17 @@ impl RootCounter {
 
     // Advance the counter by a given number of cycles, returning the new current value and whether the target or the
     // max value boundary was crossed
-    fn advance_one_batch(&self, step: u16) -> (u16, bool, bool) {
+    fn advance_one_batch(&self, step: u16, target: u16, reset_on_target: bool) -> (u16, bool, bool) {
         let start = self.current as u32;
-        let end = start + step as u32;
+        let mut end = start + step as u32;
 
-        let hit_target = (start..=end).contains(&(self.target as u32)) && self.target != 0;
+        let would_hit_target = (start..=end).contains(&(target as u32)) && target != 0;
+
+        if would_hit_target && reset_on_target {
+            end = target as u32;
+        }
+
+        let hit_target = would_hit_target;
         let hit_ffff = end > 0xFFFF;
 
         (end as u16, hit_target, hit_ffff)
@@ -100,9 +106,17 @@ impl RootCounter {
         let mut remaining = effective_cycles;
         while remaining > 0 {
             let step = remaining.min(u16::MAX as u64);
-            let (new_current, hit_target, hit_ffff) = self.advance_one_batch(step as u16);
+            let (new_current, hit_target, hit_ffff) =
+                self.advance_one_batch(step as u16, self.target, reset_on_target);
             self.current = new_current;
-            remaining -= step;
+
+            let consumed = if hit_target && reset_on_target {
+                (self.target as u32).saturating_sub(self.current as u32) as u64
+            } else {
+                step
+            };
+
+            remaining -= consumed.max(1);
 
             if hit_target && irq_on_target {
                 interrupt_controller.raise_interrupt(interrupt);

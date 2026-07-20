@@ -60,6 +60,8 @@ mod cdrom_timing {
     // INT1 rate (per-sector delay during ReadN/ReadS)
     pub const READ_INT1_1X: u64 = 0x006e1cd;
     pub const READ_INT1_2X: u64 = 0x0036cd2;
+
+    pub const SEEK_DELAY: u64 = 0x6E400;
 }
 
 /// CD-ROM controller to handle commands and disk access.
@@ -289,6 +291,7 @@ impl CdRom {
             );
             return;
         }
+
         self.push_response(&bytes);
         self.set_interrupt(int_code, interrupt_controller);
     }
@@ -749,6 +752,10 @@ impl CdRom {
 impl CdRom {
     // Dispatch
     fn execute_command(&mut self, cmd: u8, scheduler: &mut Scheduler) {
+        // Clear response fifo and any pending interrupts before executing the command
+        self.command_result.clear();
+        scheduler.cancel(|event| matches!(event, SchedulerEvent::CdRomResponse { .. }));
+
         match cmd {
             0x01 => self.cmd_getstat(scheduler),
             0x02 => self.cmd_setloc(scheduler),
@@ -763,6 +770,7 @@ impl CdRom {
             0x13 => self.cmd_gettn(scheduler),
             0x14 => self.cmd_gettd(scheduler),
             0x15 => self.cmd_seekl(scheduler),
+            0x16 => self.cmd_seekp(scheduler),
             0x19 => self.cmd_test(scheduler),
             0x1A => self.cmd_getid(scheduler),
             0x1B => self.cmd_reads(scheduler),
@@ -826,8 +834,15 @@ impl CdRom {
         INT4(stat) is generated (with stat.bit7 cleared).
         */
 
+        // If seeking, schedule with SEEK_DELAY otherwise with DEFAULT_FIRST
+        let seek_time = if self.seek_target.is_some() {
+            cdrom_timing::SEEK_DELAY
+        } else {
+            cdrom_timing::DEFAULT_FIRST
+        };
+
         self.schedule_event(
-            cdrom_timing::DEFAULT_FIRST,
+            seek_time,
             vec![self.get_status_byte()],
             3,
             scheduler,
@@ -872,8 +887,15 @@ impl CdRom {
         "stat,INT1 --> datablock", that is continued even after a successful read has occured; use the Pause command to
         terminate the repeated INT1 responses.
         */
+
+        let seek_time = if self.seek_target.is_some() {
+            cdrom_timing::SEEK_DELAY
+        } else {
+            cdrom_timing::DEFAULT_FIRST
+        };
+
         self.schedule_event(
-            cdrom_timing::DEFAULT_FIRST,
+            seek_time,
             vec![self.get_status_byte()],
             3,
             scheduler,
@@ -939,7 +961,6 @@ impl CdRom {
         response returns the new status (with bit5 cleared).
         */
 
-        // let status_while_reading = self.get_status_byte();
         let mut pause_time = if self.mode & 0x80 != 0 {
             cdrom_timing::PAUSE_SECOND_2X
         } else {
@@ -963,6 +984,7 @@ impl CdRom {
             3,
             scheduler,
         );
+
         self.schedule_event(pause_time, vec![self.get_status_byte()], 2, scheduler);
     }
 
@@ -1200,7 +1222,50 @@ impl CdRom {
 
         // Second response: INt2(Stat)
         self.schedule_event(
+            cdrom_timing::SEEK_DELAY,
+            vec![self.get_status_byte()],
+            2,
+            scheduler,
+        );
+    }
+
+    // 0x16
+    fn cmd_seekp(&mut self, scheduler: &mut Scheduler) {
+        /*
+        SeekP - Command 16h --> INT3(stat) --> INT2(stat)
+        Seek to Setloc's location in audio mode (using the Subchannel Q position data, which works on both Audio on 
+        Data disks).
+        After the seek, the disk stays on the seeked location forever (namely: when seeking sector N, it does stay at 
+        around N-9..N-1 in single speed mode, or at around N-2..N in double speed mode). This command will stop any 
+        current or pending ReadN or ReadS.
+        Note: Some older docs claim that SeekP would recurse only "MM:SS" of the "MM:SS:FF" position from Setloc - 
+        that is wrong, it does seek to MM:SS:FF (verified on a PSone).
+        After the seek, status is stat.bit7=0 (ie. audio playback off), until sending a new Play command 
+        (without parameters) to start playback at the seeked location.
+        */
+
+        self.schedule_event(
             cdrom_timing::DEFAULT_FIRST,
+            vec![self.get_status_byte()],
+            3,
+            scheduler,
+        );
+
+        // Stop any current or pending ReadN/ReadS, per spec
+        self.reading = false;
+        scheduler.cancel(|event| matches!(event, SchedulerEvent::CdRomSectorRead));
+
+        // Consume the seek target and update our current location
+        if let Some(target) = self.seek_target.take() {
+            self.current_logical_block = target;
+        }
+
+        // Audio playback is off after a seek, until a fresh Play command starts it
+        self.playing = false;
+
+        // Second response: INT2(stat)
+        self.schedule_event(
+            cdrom_timing::SEEK_DELAY,
             vec![self.get_status_byte()],
             2,
             scheduler,

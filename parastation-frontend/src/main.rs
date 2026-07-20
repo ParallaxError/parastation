@@ -28,6 +28,6 @@ fn main() {
     let mut runner = Runner::new(&event_loop, bios);
     // runner.set_uncapped(true);
 
-    runner.insert_cdrom_disc(r"games\Ridge Racer\Ridge Racer.cue");
+    runner.insert_cdrom_disc(r"games\Crash Bandicoot [NTSC-U] [SCUS-94900]\Crash Bandicoot (USA).cue");
     runner.run(event_loop);
 }
