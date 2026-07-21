@@ -13,6 +13,8 @@ use parastation_core::gpu::TextureWindow;
 use parastation_core::gpu::backend::GpuBackend;
 use parastation_core::gpu::*;
 
+use crate::gl_texture_barrier::RawGlExt;
+
 /// VRAM transfer from the CPU to the OpenGL VRAM texture, accumulating pixels until the specified width
 /// and height are reached, then uploading to the GPU in one go
 struct VramTransfer {
@@ -38,12 +40,16 @@ struct VramReadTransfer {
 
 // Structs for caching uniform locations for each shader program, to avoid repeated glGetUniformLocation calls
 struct FlatUniforms {
+    vram: Option<glow::UniformLocation>,
+    is_semi_transparent: Option<glow::UniformLocation>,
+    semi_transparency_mode: Option<glow::UniformLocation>,
     drawing_offset: Option<glow::UniformLocation>,
 }
 
 struct TexturedUniforms {
     vram: Option<glow::UniformLocation>,
     is_semi_transparent: Option<glow::UniformLocation>,
+    semi_transparency_mode: Option<glow::UniformLocation>,
     is_raw_texture: Option<glow::UniformLocation>,
     tex_page: Option<glow::UniformLocation>,
     tex_window: Option<glow::UniformLocation>,
@@ -88,6 +94,9 @@ pub struct OpenGlBackend {
     flat_uniforms: FlatUniforms,
     textured_uniforms: TexturedUniforms,
     present_uniforms: PresentUniforms,
+
+    // Raw OpenGL extension function for glTextureBarrier
+    raw_ext: RawGlExt,
 }
 
 unsafe fn compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str) -> glow::Program {
@@ -155,7 +164,7 @@ impl OpenGlBackend {
     const PRESENT_VERT: &'static str = include_str!("shaders/present.vert");
     const PRESENT_FRAG: &'static str = include_str!("shaders/present.frag");
 
-    pub fn new(gl: Context) -> Self {
+    pub fn new(gl: Context, raw_ext: RawGlExt) -> Self {
         unsafe {
             // Create 1024x512 R16UI texture for VRAM
             let vram_texture = gl.create_texture().unwrap();
@@ -260,6 +269,10 @@ impl OpenGlBackend {
 
             // Finally uniform locations, cached for performance
             let flat_uniforms = FlatUniforms {
+                vram: gl.get_uniform_location(flat_program, "vram"),
+                is_semi_transparent: gl.get_uniform_location(flat_program, "is_semi_transparent"),
+                semi_transparency_mode: gl
+                    .get_uniform_location(flat_program, "semi_transparency_mode"),
                 drawing_offset: gl.get_uniform_location(flat_program, "drawing_offset"),
             };
 
@@ -267,6 +280,8 @@ impl OpenGlBackend {
                 vram: gl.get_uniform_location(textured_program, "vram"),
                 is_semi_transparent: gl
                     .get_uniform_location(textured_program, "is_semi_transparent"),
+                semi_transparency_mode: gl
+                    .get_uniform_location(textured_program, "semi_transparency_mode"),
                 is_raw_texture: gl.get_uniform_location(textured_program, "is_raw_texture"),
                 tex_page: gl.get_uniform_location(textured_program, "tex_page"),
                 tex_window: gl.get_uniform_location(textured_program, "tex_window"),
@@ -301,6 +316,7 @@ impl OpenGlBackend {
                 flat_uniforms,
                 textured_uniforms,
                 present_uniforms,
+                raw_ext,
             }
         }
     }
@@ -355,6 +371,8 @@ impl OpenGlBackend {
         &mut self,
         verts: &[FlatGlVertex],
         mode: u32,
+        semi_transparent: bool,
+        semi_transparency_mode: u8,
         drawing_area: &DrawingArea,
         drawing_offset: &DrawingOffset,
     ) {
@@ -375,6 +393,19 @@ impl OpenGlBackend {
             self.gl.use_program(Some(self.flat_program));
             self.gl.bind_vertex_array(Some(self.vertex_array));
 
+            self.gl
+                .uniform_1_i32(self.textured_uniforms.vram.as_ref(), 0);
+
+            self.gl.uniform_1_i32(
+                self.flat_uniforms.is_semi_transparent.as_ref(),
+                semi_transparent as i32,
+            );
+
+            self.gl.uniform_1_i32(
+                self.flat_uniforms.semi_transparency_mode.as_ref(),
+                semi_transparency_mode as i32,
+            );
+
             self.gl.uniform_2_f32(
                 self.flat_uniforms.drawing_offset.as_ref(),
                 drawing_offset.x as f32,
@@ -388,6 +419,10 @@ impl OpenGlBackend {
             self.gl
                 .buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STREAM_DRAW);
 
+            // Since this draw, if semi transparent, both samples and writes to the framebuffer, we need to call
+            // glTextureBarrier to ensure that the writes are visible to subsequent draws
+            self.raw_ext.texture_barrier();
+
             self.gl.draw_arrays(mode, 0, verts.len() as i32);
             check_gl_errors(&self.gl, "submit_flat");
         }
@@ -399,7 +434,7 @@ impl OpenGlBackend {
         v1: FlatVertex,
         v2: FlatVertex,
         colour: Colour,
-        _semi_transparent: bool,
+        semi_transparent: bool,
         params: &DrawParams,
     ) {
         self.submit_flat(
@@ -409,6 +444,8 @@ impl OpenGlBackend {
                 FlatGlVertex::new(v2.vertex.x, v2.vertex.y, colour),
             ],
             glow::TRIANGLES,
+            semi_transparent,
+            params.draw_mode.semi_transparency,
             &params.drawing_area,
             &params.drawing_offset,
         );
@@ -419,7 +456,7 @@ impl OpenGlBackend {
         v0: ShadedVertex,
         v1: ShadedVertex,
         v2: ShadedVertex,
-        _semi_transparent: bool,
+        semi_transparent: bool,
         params: &DrawParams,
     ) {
         self.submit_flat(
@@ -429,6 +466,8 @@ impl OpenGlBackend {
                 FlatGlVertex::new(v2.vertex.x, v2.vertex.y, v2.colour),
             ],
             glow::TRIANGLES,
+            semi_transparent,
+            params.draw_mode.semi_transparency,
             &params.drawing_area,
             &params.drawing_offset,
         );
@@ -441,7 +480,7 @@ impl OpenGlBackend {
         v2: FlatVertex,
         v3: FlatVertex,
         colour: Colour,
-        _semi_transparent: bool,
+        semi_transparent: bool,
         params: &DrawParams,
     ) {
         // PS1 splits quads as (v0,v1,v2) and (v1,v2,v3)
@@ -455,6 +494,8 @@ impl OpenGlBackend {
                 FlatGlVertex::new(v3.vertex.x, v3.vertex.y, colour),
             ],
             glow::TRIANGLES,
+            semi_transparent,
+            params.draw_mode.semi_transparency,
             &params.drawing_area,
             &params.drawing_offset,
         );
@@ -501,6 +542,11 @@ impl OpenGlBackend {
             );
 
             self.gl.uniform_1_i32(
+                self.textured_uniforms.semi_transparency_mode.as_ref(),
+                semi_transparency_mode as i32,
+            );
+
+            self.gl.uniform_1_i32(
                 self.textured_uniforms.is_raw_texture.as_ref(),
                 raw_texture as i32,
             );
@@ -538,6 +584,11 @@ impl OpenGlBackend {
             self.gl.blend_equation(glow::FUNC_ADD);
             self.gl
                 .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+
+            // Since this draw, if semi transparent, both samples and writes to the framebuffer, we need to call
+            // glTextureBarrier to ensure that the writes are visible to subsequent draws
+            self.raw_ext.texture_barrier();
+
             self.gl.draw_arrays(mode, 0, verts.len() as i32);
 
             check_gl_errors(&self.gl, "submit_textured");
@@ -775,7 +826,57 @@ impl GpuBackend for OpenGlBackend {
     }
 
     fn draw_line(&mut self, line: &Line, params: &DrawParams) {
-        println!("draw_line: {:#?}\nparams: {:#?}", line, params);
+        match line {
+            Line::Monochrome {
+                colour,
+                vertices,
+                semi_transparent,
+            } => {
+                let verts: Vec<FlatGlVertex> = vertices
+                    .iter()
+                    .map(|v| FlatGlVertex::new(v.vertex.x, v.vertex.y, *colour))
+                    .collect();
+
+                let mode = if verts.len() > 2 {
+                    glow::LINE_STRIP
+                } else {
+                    glow::LINES
+                };
+
+                self.submit_flat(
+                    &verts,
+                    mode,
+                    *semi_transparent,
+                    params.draw_mode.semi_transparency,
+                    &params.drawing_area,
+                    &params.drawing_offset,
+                );
+            }
+            Line::Coloured {
+                vertices,
+                semi_transparent,
+            } => {
+                let verts: Vec<FlatGlVertex> = vertices
+                    .iter()
+                    .map(|v| FlatGlVertex::new(v.vertex.x, v.vertex.y, v.colour))
+                    .collect();
+
+                let mode = if verts.len() > 2 {
+                    glow::LINE_STRIP
+                } else {
+                    glow::LINES
+                };
+
+                self.submit_flat(
+                    &verts,
+                    mode,
+                    *semi_transparent,
+                    params.draw_mode.semi_transparency,
+                    &params.drawing_area,
+                    &params.drawing_offset,
+                );
+            }
+        }
     }
 
     fn draw_rect(&mut self, rect: &Rect, params: &DrawParams) {
@@ -868,6 +969,8 @@ impl GpuBackend for OpenGlBackend {
                 flat(x1, y1),
             ],
             glow::TRIANGLES,
+            false,
+            0,
             &drawing_area,
             &drawing_offset,
         );

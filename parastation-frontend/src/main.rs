@@ -1,3 +1,4 @@
+mod gl_texture_barrier;
 mod keyboard_input_provider;
 mod opengl_backend;
 mod runner;

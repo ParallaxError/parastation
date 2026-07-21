@@ -27,6 +27,7 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowBuilder};
 
+use crate::gl_texture_barrier::RawGlExt;
 use crate::keyboard_input_provider::{DummyInputProvider, KeyboardInputProvider, KeyboardState};
 use crate::opengl_backend::OpenGlBackend;
 use crate::spu_backend::CpalSpuBackend;
@@ -117,10 +118,15 @@ impl Runner {
             })
         };
 
+        let raw_ext = RawGlExt::load(|s| {
+            display.get_proc_address(&std::ffi::CString::new(s.to_str().unwrap()).unwrap())
+                as *const _
+        });
+
         let keyboard_state = KeyboardState::new();
         let keyboard_input_provider = KeyboardInputProvider::new(keyboard_state.clone());
 
-        let gpu_backend = Box::new(OpenGlBackend::new(gl));
+        let gpu_backend = Box::new(OpenGlBackend::new(gl, raw_ext));
         let spu_backend = Box::new(CpalSpuBackend::new());
 
         let ps1 = Ps1::new(

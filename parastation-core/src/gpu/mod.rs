@@ -20,10 +20,13 @@ pub use backend::GpuBackend;
 mod gpu_commands;
 pub use gpu_commands::*;
 
+use crate::gpu::Gp0Command::MonochromeLine;
+
 // VRAM transfer modes
 enum Gp0Mode {
     Command,
     VramWrite,
+    Polyline,
 }
 
 // GPUREAD mode
@@ -178,6 +181,19 @@ impl Gpu {
                 return;
             }
 
+            Gp0Mode::Polyline => {
+                self.gp0_buffer.push(word);
+
+                // Per psx-spx: terminator is usually 0x55555555, but some games (Wild Arms 2) use 0x50005000
+                // The reliable check is bits 12-15 and 28-31 both equal 0x5, ie. (word & 0xF000F000) == 0x50005000.
+                if word & 0xF000_F000 == 0x5000_5000 {
+                    self.gp0_mode = Gp0Mode::Command;
+                    let command = decode_gp0_command(self.gp0_buffer[0]);
+                    self.execute_gp0_command(command);
+                }
+                return;
+            }
+
             Gp0Mode::Command => {
                 // First, are we currently accumulating a command?
                 if self.gp0_words_remaining > 0 {
@@ -189,7 +205,15 @@ impl Gpu {
                     let command = decode_gp0_command(word);
                     self.gp0_buffer.clear();
                     self.gp0_buffer.push(word);
-                    self.gp0_words_remaining = gp0_command_parameter_count(&command) as u32;
+                    match command {
+                        Gp0Command::MonochromePolyline | Gp0Command::ShadedPolyline => {
+                            self.gp0_mode = Gp0Mode::Polyline;
+                            return;
+                        }
+                        _ => {
+                            self.gp0_words_remaining = gp0_command_parameter_count(&command) as u32;
+                        }
+                    }
                 }
 
                 // If we're done accumulating a command, execute it
@@ -215,6 +239,11 @@ impl Gpu {
             Gp0Command::ShadedQuad => self.draw_shaded_quad(),
             Gp0Command::ShadedTexturedTri => self.draw_shaded_textured_tri(),
             Gp0Command::ShadedTexturedQuad => self.draw_shaded_textured_quad(),
+
+            Gp0Command::MonochromeLine => self.draw_monochrome_line(),
+            Gp0Command::MonochromePolyline => self.draw_monochrome_polyline(),
+            Gp0Command::ShadedLine => self.draw_shaded_line(),
+            Gp0Command::ShadedPolyline => self.draw_shaded_polyline(),
 
             Gp0Command::VariableMonochromeRectangle => self.draw_variable_monochrome_rectangle(),
             Gp0Command::MonochromeRectangle => self.draw_monochrome_rectangle(),
@@ -910,6 +939,152 @@ impl Gpu {
         };
 
         self.backend.draw_polygon(&quad, &self.get_draw_params());
+    }
+
+    fn draw_monochrome_line(&mut self) {
+        /*
+         bit number   value   meaning
+          31-29        010    line render
+            25         1/0    semi-transparent / opaque
+           23-0        rgb    first color value.
+
+        1st   Color+Command     (CcBbGgRrh)
+        2nd   Vertex1           (YyyyXxxxh)
+        3rd   Vertex2           (YyyyXxxxh)
+        */
+
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour = Colour::from_word(self.gp0_buffer[0]);
+        let semi_transparent = cmd & 0x20 != 0;
+
+        let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
+        let vertex2 = Vertex::from_word(self.gp0_buffer[2]);
+
+        // Make two LinePoints
+        let point1 = LinePoint { vertex: vertex1 };
+        let point2 = LinePoint { vertex: vertex2 };
+
+        let line = Line::Monochrome {
+            colour: colour,
+            vertices: vec![point1, point2],
+            semi_transparent,
+        };
+
+        self.backend.draw_line(&line, &self.get_draw_params());
+    }
+
+    fn draw_monochrome_polyline(&mut self) {
+        /*
+         bit number   value   meaning
+          31-29        011    line render
+            25         1/0    semi-transparent / opaque
+           23-0        rgb    first color value.
+
+        1st   Color+Command     (CcBbGgRrh)
+        2nd   Vertex1           (YyyyXxxxh)
+        3rd   Vertex2           (YyyyXxxxh)
+        (...)  VertexN           (YyyyXxxxh) (poly-line only)
+        (Last) Termination Code  (55555555h) (poly-line only)
+        */
+
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let colour = Colour::from_word(self.gp0_buffer[0]);
+        let semi_transparent = cmd & 0x20 != 0;
+
+        let make_vertex = |word: u32| -> LinePoint {
+            let vertex = Vertex::from_word(word);
+            LinePoint { vertex }
+        };
+
+        // Map 1:last in the buffer to vertices, stopping at last element
+        let vertices: Vec<LinePoint> = self.gp0_buffer[1..self.gp0_buffer.len() - 1]
+            .iter()
+            .map(|&word| make_vertex(word))
+            .collect();
+
+        let line = Line::Monochrome {
+            colour: colour,
+            vertices,
+            semi_transparent,
+        };
+
+        self.backend.draw_line(&line, &self.get_draw_params());
+    }
+
+    fn draw_shaded_line(&mut self) {
+        /*
+         bit number   value   meaning
+          31-29        010    line render
+            25         1/0    semi-transparent / opaque
+
+        1st   Color1+Command    (CcBbGgRrh)
+        2nd   Vertex1           (YyyyXxxxh)
+        3rd   Color2            (00BbGgRrh)
+        4th   Vertex2           (YyyyXxxxh)
+        */
+
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let semi_transparent = cmd & 0x20 != 0;
+
+        let colour1 = Colour::from_word(self.gp0_buffer[0]);
+        let vertex1 = Vertex::from_word(self.gp0_buffer[1]);
+        let colour2 = Colour::from_word(self.gp0_buffer[2]);
+        let vertex2 = Vertex::from_word(self.gp0_buffer[3]);
+
+        let point1 = ColouredLinePoint {
+            vertex: vertex1,
+            colour: colour1,
+        };
+
+        let point2 = ColouredLinePoint {
+            vertex: vertex2,
+            colour: colour2,
+        };
+
+        let line = Line::Coloured {
+            vertices: vec![point1, point2],
+            semi_transparent,
+        };
+
+        self.backend.draw_line(&line, &self.get_draw_params());
+    }
+
+    fn draw_shaded_polyline(&mut self) {
+        /*
+         bit number   value   meaning
+          31-29        011    line render
+            25         1/0    semi-transparent / opaque
+
+        1st   Color1+Command    (CcBbGgRrh)
+        2nd   Vertex1           (YyyyXxxxh)
+        3rd   Color2            (00BbGgRrh)
+        4th   Vertex2           (YyyyXxxxh)
+        (...)  ColorN            (00BbGgRrh) (poly-line only)
+        (...)  VertexN           (YyyyXxxxh) (poly-line only)
+        (Last) Termination Code  (55555555h) (poly-line only)
+        */
+
+        let cmd = (self.gp0_buffer[0] >> 24) as u8;
+        let semi_transparent = cmd & 0x20 != 0;
+
+        let make_vertex = |colour_word: u32, vertex_word: u32| -> ColouredLinePoint {
+            let colour = Colour::from_word(colour_word);
+            let vertex = Vertex::from_word(vertex_word);
+            ColouredLinePoint { vertex, colour }
+        };
+
+        // Map 1:last in the buffer to vertices, stopping at last element
+        let vertices: Vec<ColouredLinePoint> = (1..self.gp0_buffer.len() - 1)
+            .step_by(2)
+            .map(|i| make_vertex(self.gp0_buffer[i], self.gp0_buffer[i + 1]))
+            .collect();
+
+        let line = Line::Coloured {
+            vertices,
+            semi_transparent,
+        };
+
+        self.backend.draw_line(&line, &self.get_draw_params());
     }
 
     fn draw_variable_monochrome_rectangle(&mut self) {

@@ -51,41 +51,75 @@ pub enum Gp0Command {
 
 /// Decode a GP0 command from the first word of the command buffer
 pub fn decode_gp0_command(word: u32) -> Gp0Command {
-    // TODO please use updated psx-spx for dispatch, this is kind of bad
-    let command_id = (word >> 24) as u8;
-    match command_id {
-        0x00 => Gp0Command::Nop,
-        0x01 => Gp0Command::ClearCache,
-        0x02 => Gp0Command::FillRect,
-        0x03 => Gp0Command::Unknown0x03,
-        0x1F => Gp0Command::RaiseIrq,
+    // https://psx-spx.consoledev.net/graphicsprocessingunitgpu/
 
-        0x20 | 0x21 | 0x22 | 0x23 => Gp0Command::MonochromeTri,
-        0x28 | 0x29 | 0x2A | 0x2B => Gp0Command::MonochromeQuad,
-        0x24 | 0x25 | 0x26 | 0x27 => Gp0Command::TexturedTri,
-        0x2C | 0x2D | 0x2E | 0x2F => Gp0Command::TexturedQuad,
-        0x30 | 0x31 | 0x32 | 0x33 => Gp0Command::ShadedTri,
-        0x38 | 0x39 | 0x3A | 0x3B => Gp0Command::ShadedQuad,
-        0x34 | 0x35 | 0x36 | 0x37 => Gp0Command::ShadedTexturedTri,
-        0x3C | 0x3D | 0x3E | 0x3F => Gp0Command::ShadedTexturedQuad,
+    let top3 = (word >> 29) & 0x7;
+    let cmd_byte = (word >> 24) as u8;
 
-        0x40 | 0x42 => Gp0Command::MonochromeLine,
-        0x48 | 0x4A => Gp0Command::MonochromePolyline,
-        0x50 | 0x52 => Gp0Command::ShadedLine,
-        0x58 | 0x5A => Gp0Command::ShadedPolyline,
+    match top3 {
+        // Misc commands
+        0 => match cmd_byte {
+            0x01 => Gp0Command::ClearCache,
+            0x02 => Gp0Command::FillRect,
+            0x03 => Gp0Command::Unknown0x03,
+            0x1F => Gp0Command::RaiseIrq,
+            0x00 | 0x04..=0x1E | 0xE0 | 0xE7..=0xEF => Gp0Command::Nop,
+            0xE1..=0xE6 => Gp0Command::SetRenderingAttribute,
+            _ => Gp0Command::Unknown(cmd_byte),
+        },
 
-        0x60 | 0x62 => Gp0Command::VariableMonochromeRectangle,
-        0x68 | 0x6A | 0x70 | 0x72 | 0x78 | 0x7A => Gp0Command::MonochromeRectangle,
-        0x64 | 0x65 | 0x66 | 0x67 => Gp0Command::VariableTexturedRectangle,
-        0x6C..=0x6F | 0x74..=0x7F => Gp0Command::TexturedRectangle,
+        // Polygon: bit28=gouraud, bit27=quad, bit26=textured
+        1 => {
+            let gouraud = (word >> 28) & 1 != 0;
+            let quad = (word >> 27) & 1 != 0;
+            let textured = (word >> 26) & 1 != 0;
+            match (quad, textured, gouraud) {
+                (false, false, false) => Gp0Command::MonochromeTri,
+                (false, false, true) => Gp0Command::ShadedTri,
+                (true, false, false) => Gp0Command::MonochromeQuad,
+                (true, false, true) => Gp0Command::ShadedQuad,
+                (false, true, false) => Gp0Command::TexturedTri,
+                (false, true, true) => Gp0Command::ShadedTexturedTri,
+                (true, true, false) => Gp0Command::TexturedQuad,
+                (true, true, true) => Gp0Command::ShadedTexturedQuad,
+            }
+        }
 
-        0x80 => Gp0Command::CopyRect,
-        0xA0 => Gp0Command::SendRectToVram,
-        0xC0 => Gp0Command::CopyRectToCpu,
+        // Line: bit28=gouraud, bit27=polyline
+        2 => {
+            let gouraud = (word >> 28) & 1 != 0;
+            let polyline = (word >> 27) & 1 != 0;
+            match (polyline, gouraud) {
+                (false, false) => Gp0Command::MonochromeLine,
+                (true, false) => Gp0Command::MonochromePolyline,
+                (false, true) => Gp0Command::ShadedLine,
+                (true, true) => Gp0Command::ShadedPolyline,
+            }
+        }
 
-        0xE1..=0xE6 => Gp0Command::SetRenderingAttribute,
+        // Rectangle: bits 27-28=size, bit26=textured
+        3 => {
+            let size = (word >> 27) & 0x3;
+            let textured = (word >> 26) & 1 != 0;
+            match (size, textured) {
+                (0, false) => Gp0Command::VariableMonochromeRectangle,
+                (0, true) => Gp0Command::VariableTexturedRectangle,
+                (_, false) => Gp0Command::MonochromeRectangle,
+                (_, true) => Gp0Command::TexturedRectangle,
+            }
+        }
 
-        _ => Gp0Command::Unknown(command_id),
+        4 => Gp0Command::CopyRect,       // VRAM-to-VRAM blit
+        5 => Gp0Command::SendRectToVram, // CPU-to-VRAM blit
+        6 => Gp0Command::CopyRectToCpu,  // VRAM-to-CPU blit
+
+        // Environment commands, identified by full byte
+        7 => match cmd_byte {
+            0xE1..=0xE6 => Gp0Command::SetRenderingAttribute,
+            _ => Gp0Command::Unknown(cmd_byte),
+        },
+
+        _ => unreachable!(),
     }
 }
 

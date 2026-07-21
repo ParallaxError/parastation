@@ -4,6 +4,7 @@ uniform usampler2D vram;
 uniform int tex_depth;
 uniform vec2 tex_page;
 uniform bool is_semi_transparent;
+uniform int semi_transparency_mode;
 uniform bool is_raw_texture;
 uniform vec4 tex_window;
 
@@ -49,14 +50,46 @@ void main() {
     uint raw_r = (raw >>  0u) & 0x1Fu;
     uint raw_g = (raw >>  5u) & 0x1Fu;
     uint raw_b = (raw >> 10u) & 0x1Fu;
+    bool clut_stp = (raw & 0x8000u) != 0u;
 
     // frag_colour is 0-255 scale, and so we scale it down to 0-2 for the RGB555 output, and multiply by the 
     // texture colour
-    uint out_r = is_raw_texture ? raw_r : min((raw_r * uint(frag_colour.r)) / 128u, 31u);
-    uint out_g = is_raw_texture ? raw_g : min((raw_g * uint(frag_colour.g)) / 128u, 31u);
-    uint out_b = is_raw_texture ? raw_b : min((raw_b * uint(frag_colour.b)) / 128u, 31u);
+    int out_r = int(is_raw_texture ? raw_r : min((raw_r * uint(frag_colour.r)) / 128u, 31u));
+    int out_g = int(is_raw_texture ? raw_g : min((raw_g * uint(frag_colour.g)) / 128u, 31u));
+    int out_b = int(is_raw_texture ? raw_b : min((raw_b * uint(frag_colour.b)) / 128u, 31u));
+
+    // Handle semi transparency: https://psx-spx.consoledev.net/graphicsprocessingunitgpu/#semi-transparency
+    /*
+    For textured primitives using 4-bit or 8-bit textures, bit 15 of each CLUT entry acts as a semi-transparency flag 
+    and determines whether to apply semi-transparency to the pixel or not. If the semi-transparency flag is off, the new
+     pixel is written to VRAM as-is
+    */
+    if (is_semi_transparent && clut_stp) {
+        uint old = vram_read(ivec2(gl_FragCoord.xy));
+        int br = int((old >>  0u) & 0x1Fu);
+        int bg = int((old >>  5u) & 0x1Fu);
+        int bb = int((old >> 10u) & 0x1Fu);
+
+        if (semi_transparency_mode == 0) {
+            out_r = (br + out_r) / 2;
+            out_g = (bg + out_g) / 2;
+            out_b = (bb + out_b) / 2;
+        } else if (semi_transparency_mode == 1) {
+            out_r = min(br + out_r, 31);
+            out_g = min(bg + out_g, 31);
+            out_b = min(bb + out_b, 31);
+        } else if (semi_transparency_mode == 2) {
+            out_r = max(br - out_r, 0);
+            out_g = max(bg - out_g, 0);
+            out_b = max(bb - out_b, 0);
+        } else {
+            out_r = min(br + out_r / 4, 31);
+            out_g = min(bg + out_g / 4, 31);
+            out_b = min(bb + out_b / 4, 31);
+        }
+    }
 
     // Repack to RGB555 for the PS1 output
-    uint bgr555 = out_r | (out_g << 5u) | (out_b << 10u);
+    uint bgr555 = uint(out_r) | (uint(out_g) << 5u) | (uint(out_b) << 10u);
     out_colour = uvec4(bgr555, 0u, 0u, 0u);
 }

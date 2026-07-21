@@ -218,6 +218,7 @@ pub struct ColouredLinePoint {
 #[derive(Debug)]
 pub enum Line {
     Monochrome {
+        colour: Colour,
         vertices: Vec<LinePoint>,
         semi_transparent: bool,
     },
