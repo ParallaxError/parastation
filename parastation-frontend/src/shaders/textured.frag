@@ -6,6 +6,7 @@ uniform vec2 tex_page;
 uniform bool is_semi_transparent;
 uniform int semi_transparency_mode;
 uniform bool is_raw_texture;
+uniform bool dither;
 uniform vec4 tex_window;
 
 in vec3 frag_colour;
@@ -16,6 +17,20 @@ out uvec4 out_colour;
 
 uint vram_read(ivec2 coord) {
     return texelFetch(vram, coord, 0).r;
+}
+
+// Dithering table
+const int dither_table[16] = int[16](
+    -4,  0, -3,  1,
+     2, -2,  3, -1,
+    -3,  1, -4,  0,
+     3, -1,  2, -2
+);
+
+int get_dither(ivec2 coord) {
+    int x = coord.x & 3;
+    int y = coord.y & 3;
+    return dither_table[y * 4 + x];
 }
 
 void main() {
@@ -52,11 +67,27 @@ void main() {
     uint raw_b = (raw >> 10u) & 0x1Fu;
     bool clut_stp = (raw & 0x8000u) != 0u;
 
-    // frag_colour is 0-255 scale, and so we scale it down to 0-2 for the RGB555 output, and multiply by the 
-    // texture colour
-    int out_r = int(is_raw_texture ? raw_r : min((raw_r * uint(frag_colour.r)) / 128u, 31u));
-    int out_g = int(is_raw_texture ? raw_g : min((raw_g * uint(frag_colour.g)) / 128u, 31u));
-    int out_b = int(is_raw_texture ? raw_b : min((raw_b * uint(frag_colour.b)) / 128u, 31u));
+    int out_r, out_g, out_b;
+
+    if (is_raw_texture) {
+        out_r = int(raw_r);
+        out_g = int(raw_g);
+        out_b = int(raw_b);
+    } else {
+        // Modulate in 8-bit-equivalent space (raw_5bit * colour_8bit / 128 keeps result in 0-31, so scale up by 8 to 
+        // dither properly
+        int mod_r = int(min((raw_r * uint(frag_colour.r)) / 128u, 31u));
+        int mod_g = int(min((raw_g * uint(frag_colour.g)) / 128u, 31u));
+        int mod_b = int(min((raw_b * uint(frag_colour.b)) / 128u, 31u));
+
+        int dith = dither ? get_dither(ivec2(gl_FragCoord.xy)) : 0;
+
+        // dither table is scaled for 8-bit; approximate at 5-bit by dividing offset by 8, clamped to avoid rounding to 
+        // zero losing effect entirely
+        out_r = clamp(mod_r + dith / 8, 0, 31);
+        out_g = clamp(mod_g + dith / 8, 0, 31);
+        out_b = clamp(mod_b + dith / 8, 0, 31);
+    }
 
     // Handle semi transparency: https://psx-spx.consoledev.net/graphicsprocessingunitgpu/#semi-transparency
     /*

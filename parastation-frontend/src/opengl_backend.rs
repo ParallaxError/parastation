@@ -43,6 +43,7 @@ struct FlatUniforms {
     vram: Option<glow::UniformLocation>,
     is_semi_transparent: Option<glow::UniformLocation>,
     semi_transparency_mode: Option<glow::UniformLocation>,
+    dither: Option<glow::UniformLocation>,
     drawing_offset: Option<glow::UniformLocation>,
 }
 
@@ -51,6 +52,7 @@ struct TexturedUniforms {
     is_semi_transparent: Option<glow::UniformLocation>,
     semi_transparency_mode: Option<glow::UniformLocation>,
     is_raw_texture: Option<glow::UniformLocation>,
+    dither: Option<glow::UniformLocation>,
     tex_page: Option<glow::UniformLocation>,
     tex_window: Option<glow::UniformLocation>,
     tex_depth: Option<glow::UniformLocation>,
@@ -273,6 +275,7 @@ impl OpenGlBackend {
                 is_semi_transparent: gl.get_uniform_location(flat_program, "is_semi_transparent"),
                 semi_transparency_mode: gl
                     .get_uniform_location(flat_program, "semi_transparency_mode"),
+                dither: gl.get_uniform_location(flat_program, "dither"),
                 drawing_offset: gl.get_uniform_location(flat_program, "drawing_offset"),
             };
 
@@ -283,6 +286,7 @@ impl OpenGlBackend {
                 semi_transparency_mode: gl
                     .get_uniform_location(textured_program, "semi_transparency_mode"),
                 is_raw_texture: gl.get_uniform_location(textured_program, "is_raw_texture"),
+                dither: gl.get_uniform_location(textured_program, "dither"),
                 tex_page: gl.get_uniform_location(textured_program, "tex_page"),
                 tex_window: gl.get_uniform_location(textured_program, "tex_window"),
                 tex_depth: gl.get_uniform_location(textured_program, "tex_depth"),
@@ -373,6 +377,7 @@ impl OpenGlBackend {
         mode: u32,
         semi_transparent: bool,
         semi_transparency_mode: u8,
+        dither: bool,
         drawing_area: &DrawingArea,
         drawing_offset: &DrawingOffset,
     ) {
@@ -394,7 +399,7 @@ impl OpenGlBackend {
             self.gl.bind_vertex_array(Some(self.vertex_array));
 
             self.gl
-                .uniform_1_i32(self.textured_uniforms.vram.as_ref(), 0);
+                .uniform_1_i32(self.flat_uniforms.vram.as_ref(), 0);
 
             self.gl.uniform_1_i32(
                 self.flat_uniforms.is_semi_transparent.as_ref(),
@@ -404,6 +409,11 @@ impl OpenGlBackend {
             self.gl.uniform_1_i32(
                 self.flat_uniforms.semi_transparency_mode.as_ref(),
                 semi_transparency_mode as i32,
+            );
+
+            self.gl.uniform_1_i32(
+                self.flat_uniforms.dither.as_ref(),
+                dither as i32,
             );
 
             self.gl.uniform_2_f32(
@@ -446,6 +456,7 @@ impl OpenGlBackend {
             glow::TRIANGLES,
             semi_transparent,
             params.draw_mode.semi_transparency,
+            params.draw_mode.dither,
             &params.drawing_area,
             &params.drawing_offset,
         );
@@ -468,6 +479,7 @@ impl OpenGlBackend {
             glow::TRIANGLES,
             semi_transparent,
             params.draw_mode.semi_transparency,
+            params.draw_mode.dither,
             &params.drawing_area,
             &params.drawing_offset,
         );
@@ -496,6 +508,7 @@ impl OpenGlBackend {
             glow::TRIANGLES,
             semi_transparent,
             params.draw_mode.semi_transparency,
+            params.draw_mode.dither,
             &params.drawing_area,
             &params.drawing_offset,
         );
@@ -511,6 +524,7 @@ impl OpenGlBackend {
         semi_transparent: bool,
         raw_texture: bool,
         semi_transparency_mode: u8,
+        dither: bool,
         texture_window: &TextureWindow,
         drawing_area: &DrawingArea,
         drawing_offset: &DrawingOffset,
@@ -549,6 +563,11 @@ impl OpenGlBackend {
             self.gl.uniform_1_i32(
                 self.textured_uniforms.is_raw_texture.as_ref(),
                 raw_texture as i32,
+            );
+
+            self.gl.uniform_1_i32(
+                self.textured_uniforms.dither.as_ref(),
+                dither as i32,
             );
 
             self.gl
@@ -637,6 +656,7 @@ impl OpenGlBackend {
             semi_transparent,
             texture_params.raw_texture,
             texture_params.tex_page.semi_transparency,
+            params.draw_mode.dither,
             &params.texture_window,
             &params.drawing_area,
             &params.drawing_offset,
@@ -684,6 +704,7 @@ impl OpenGlBackend {
             semi_transparent,
             texture_params.raw_texture,
             texture_params.tex_page.semi_transparency,
+            params.draw_mode.dither,
             &params.texture_window,
             &params.drawing_area,
             &params.drawing_offset,
@@ -760,6 +781,7 @@ impl OpenGlBackend {
             semi_transparent,
             raw_texture,
             mode.semi_transparency,
+            params.draw_mode.dither,
             &params.texture_window,
             &params.drawing_area,
             &params.drawing_offset,
@@ -848,6 +870,7 @@ impl GpuBackend for OpenGlBackend {
                     mode,
                     *semi_transparent,
                     params.draw_mode.semi_transparency,
+                    params.draw_mode.dither,
                     &params.drawing_area,
                     &params.drawing_offset,
                 );
@@ -872,6 +895,7 @@ impl GpuBackend for OpenGlBackend {
                     mode,
                     *semi_transparent,
                     params.draw_mode.semi_transparency,
+                    params.draw_mode.dither,
                     &params.drawing_area,
                     &params.drawing_offset,
                 );
@@ -971,6 +995,7 @@ impl GpuBackend for OpenGlBackend {
             glow::TRIANGLES,
             false,
             0,
+            false,
             &drawing_area,
             &drawing_offset,
         );

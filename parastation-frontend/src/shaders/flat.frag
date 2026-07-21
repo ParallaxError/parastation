@@ -3,6 +3,7 @@
 uniform usampler2D vram;
 uniform bool is_semi_transparent;
 uniform int semi_transparency_mode;
+uniform bool dither;
 
 in vec3 frag_colour;
 out uvec4 out_colour;
@@ -11,15 +12,28 @@ uint vram_read(ivec2 coord) {
     return texelFetch(vram, coord, 0).r;
 }
 
-void main() {
-    // TODO: Dithering
-    float cr = clamp(frag_colour.r, 0.0, 1.0);
-    float cg = clamp(frag_colour.g, 0.0, 1.0);
-    float cb = clamp(frag_colour.b, 0.0, 1.0);
+// Dithering table
+const int dither_table[16] = int[16](
+    -4,  0, -3,  1,
+     2, -2,  3, -1,
+    -3,  1, -4,  0,
+     3, -1,  2, -2
+);
 
-    int ir = int(cr * 31.0 + 0.5);
-    int ig = int(cg * 31.0 + 0.5);
-    int ib = int(cb * 31.0 + 0.5);
+int get_dither(ivec2 coord) {
+    int x = coord.x & 3;
+    int y = coord.y & 3;
+    return dither_table[y * 4 + x];
+}
+
+void main() {
+    vec3 c = clamp(frag_colour, 0.0, 1.0) * 255.0;
+
+    int dith = dither ? get_dither(ivec2(gl_FragCoord.xy)) : 0;
+
+    int ir = clamp(int(c.r) + dith, 0, 255) >> 3;
+    int ig = clamp(int(c.g) + dith, 0, 255) >> 3;
+    int ib = clamp(int(c.b) + dith, 0, 255) >> 3;
 
     // // Handle semi transparency: https://psx-spx.consoledev.net/graphicsprocessingunitgpu/#semi-transparency
     if (is_semi_transparent) {
