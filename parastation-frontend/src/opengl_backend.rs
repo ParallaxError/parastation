@@ -398,8 +398,7 @@ impl OpenGlBackend {
             self.gl.use_program(Some(self.flat_program));
             self.gl.bind_vertex_array(Some(self.vertex_array));
 
-            self.gl
-                .uniform_1_i32(self.flat_uniforms.vram.as_ref(), 0);
+            self.gl.uniform_1_i32(self.flat_uniforms.vram.as_ref(), 0);
 
             self.gl.uniform_1_i32(
                 self.flat_uniforms.is_semi_transparent.as_ref(),
@@ -411,10 +410,8 @@ impl OpenGlBackend {
                 semi_transparency_mode as i32,
             );
 
-            self.gl.uniform_1_i32(
-                self.flat_uniforms.dither.as_ref(),
-                dither as i32,
-            );
+            self.gl
+                .uniform_1_i32(self.flat_uniforms.dither.as_ref(), dither as i32);
 
             self.gl.uniform_2_f32(
                 self.flat_uniforms.drawing_offset.as_ref(),
@@ -565,10 +562,8 @@ impl OpenGlBackend {
                 raw_texture as i32,
             );
 
-            self.gl.uniform_1_i32(
-                self.textured_uniforms.dither.as_ref(),
-                dither as i32,
-            );
+            self.gl
+                .uniform_1_i32(self.textured_uniforms.dither.as_ref(), dither as i32);
 
             self.gl
                 .uniform_2_f32(self.textured_uniforms.tex_page.as_ref(), tex_x, tex_y);

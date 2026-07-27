@@ -20,8 +20,6 @@ pub use backend::GpuBackend;
 mod gpu_commands;
 pub use gpu_commands::*;
 
-use crate::gpu::Gp0Command::MonochromeLine;
-
 // VRAM transfer modes
 enum Gp0Mode {
     Command,

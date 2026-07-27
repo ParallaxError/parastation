@@ -18,6 +18,7 @@ mod dma;
 pub mod gpu;
 mod interpreter;
 mod interrupt_controller;
+mod mdec;
 mod memory_map;
 mod ram;
 mod scheduler;

@@ -17,6 +17,7 @@ use crate::cd_rom::CdRom;
 use crate::dma::{DmaController, DmaTransfer};
 use crate::gpu::{Gpu, GpuBackend};
 use crate::interrupt_controller::{Interrupt, InterruptController};
+use crate::mdec::Mdec;
 use crate::memory_map::*;
 use crate::ram::Ram;
 use crate::scheduler::{Scheduler, SchedulerEvent};
@@ -53,6 +54,7 @@ pub struct SystemBus {
     pub spu: Spu,
     cd_rom: CdRom,
     timers: Timers,
+    mdec: Mdec,
 }
 
 impl SystemBus {
@@ -81,6 +83,7 @@ impl SystemBus {
             spu: Spu::new(spu_backend),
             cd_rom: CdRom::new(),
             timers: Timers::new(),
+            mdec: Mdec::new(),
         }
     }
 }
@@ -209,6 +212,9 @@ impl SystemBus {
         if let Some(offset) = GPU_REGISTERS.contains(addr) {
             return self.read_gpu_register(offset);
         }
+        if let Some(offset) = MDEC_REGISTERS.contains(addr) {
+            return self.mdec.read_register(offset);
+        }
 
         eprintln!("Unhandled read at address {addr:#x}");
         0
@@ -260,6 +266,9 @@ impl SystemBus {
         }
         if let Some(offset) = GPU_REGISTERS.contains(addr) {
             return self.write_gpu_register(offset, value);
+        }
+        if let Some(offset) = MDEC_REGISTERS.contains(addr) {
+            return self.mdec.write_register(offset, value);
         }
 
         if addr == 0xFFFE_0130 {
@@ -444,6 +453,34 @@ impl SystemBus {
             addr = addr.wrapping_add(4); // Wrap around the 2MB RAM size
         }
     }
+
+    fn dma_mdec_in(&mut self, base_addr: u32, word_count: u32) {
+        let mut addr = base_addr & 0x001F_FFFC;
+        let mut remaining = word_count;
+
+        while remaining > 0 && self.mdec.wants_more_input() {
+            let block_words = remaining.min(0x20);
+            for _ in 0..block_words {
+                let word = self.ram.read32(addr);
+                self.mdec.write_command_param(word);
+                addr = addr.wrapping_add(4);
+            }
+            remaining -= block_words;
+        }
+    }
+
+    fn dma_mdec_out(&mut self, base_addr: u32, word_count: u32) {
+        let mut addr = base_addr & 0x001F_FFFC;
+        let mut remaining = word_count;
+
+        while remaining > 0 && self.mdec.has_output_ready() {
+            let (word, byte_offset) = self.mdec.dma_read_data_out();
+            let write_addr = (addr.wrapping_add(byte_offset)) & 0x001F_FFFC;
+            self.ram.write32(write_addr, word);
+            addr = addr.wrapping_add(4);
+            remaining -= 1;
+        }
+    }
 }
 
 // DMA dispatch
@@ -475,7 +512,14 @@ impl SystemBus {
                 dest_addr,
                 word_count,
             } => self.dma_spu_read(dest_addr, word_count),
-            _ => eprintln!("Unhandled DMA transfer type: {:?}", transfer),
+            DmaTransfer::MdecIn {
+                src_addr,
+                word_count,
+            } => self.dma_mdec_in(src_addr, word_count),
+            DmaTransfer::MdecOut {
+                dest_addr,
+                word_count,
+            } => self.dma_mdec_out(dest_addr, word_count),
         }
     }
 

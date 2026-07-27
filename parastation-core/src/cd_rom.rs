@@ -61,7 +61,7 @@ mod cdrom_timing {
     pub const READ_INT1_1X: u64 = 0x006e1cd;
     pub const READ_INT1_2X: u64 = 0x0036cd2;
 
-    pub const SEEK_DELAY: u64 = 0x6E400;
+    pub const SEEK_DELAY: u64 = 0x1E400; // TODO can calculate accurate seek timing?
 }
 
 /// CD-ROM controller to handle commands and disk access.
@@ -752,6 +752,7 @@ impl CdRom {
 impl CdRom {
     // Dispatch
     fn execute_command(&mut self, cmd: u8, scheduler: &mut Scheduler) {
+        println!("Executing CD-ROM command {cmd}");
         // Clear response fifo and any pending interrupts before executing the command
         self.command_result.clear();
         scheduler.cancel(|event| matches!(event, SchedulerEvent::CdRomResponse { .. }));

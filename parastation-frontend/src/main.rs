@@ -29,6 +29,10 @@ fn main() {
     let mut runner = Runner::new(&event_loop, bios);
     // runner.set_uncapped(true);
 
-    runner.insert_cdrom_disc(r"games\Ridge Racer\Ridge Racer.cue");
+    runner.insert_cdrom_disc(r"games/MGS/Metal Gear Solid (Disc 1).cue");
+    // runner.run_until_pc_and_load_exe(
+    //     0x80030000,
+    //     r"tests/mdec/movie/movie-24bit.exe",
+    // );
     runner.run(event_loop);
 }

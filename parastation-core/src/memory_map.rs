@@ -79,6 +79,12 @@ pub const GPU_REGISTERS: Range = Range {
     start: 0x1F80_1810,
     end: 0x1F80_1818,
 };
+
+pub const MDEC_REGISTERS: Range = Range {
+    start: 0x1F80_1820,
+    end: 0x1F80_1828,
+};
+
 pub const SPU_REGISTERS: Range = Range {
     start: 0x1F80_1C00,
     end: 0x1F80_1E80,
