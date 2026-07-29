@@ -67,6 +67,12 @@ pub struct Spu {
 
     // Backend
     backend: Box<dyn SpuBackend>,
+
+    // Volume scaling
+    cd_volume_left: i16,
+    cd_volume_right: i16,
+    extern_volume_left: i16,
+    extern_volume_right: i16,
 }
 
 impl Spu {
@@ -91,6 +97,10 @@ impl Spu {
             non: [false; 24],
             noise_generator: NoiseGenerator::new(),
             backend,
+            cd_volume_left: 0x7FFF,
+            cd_volume_right: 0x7FFF,
+            extern_volume_left: 0x7FFF,
+            extern_volume_right: 0x7FFF,
         }
     }
 
@@ -156,6 +166,12 @@ impl Spu {
             0x1AA => self.spu_control,
             0x1AC => self.data_transfer_control,
             0x1AE => self.spu_status,
+            0x1B0 => self.cd_volume_left as u16,
+            0x1B2 => self.cd_volume_right as u16,
+            0x1B4 => self.extern_volume_left as u16,
+            0x1B6 => self.extern_volume_right as u16,
+            0x1B8 => self.mixer.read_main_volume_left() as u16,
+            0x1BA => self.mixer.read_main_volume_right() as u16,
             _ => {
                 eprintln!(
                     "Invalid/unhandled SPU read from register offset: 0x{:X}",
@@ -225,6 +241,12 @@ impl Spu {
             0x1A8 => self.write_data_port(value, interrupt_controller),
             0x1AA => self.write_spu_control(value),
             0x1AC => self.data_transfer_control = value,
+            0x1B0 => self.cd_volume_left = value as i16,
+            0x1B2 => self.cd_volume_right = value as i16,
+            0x1B4 => self.extern_volume_left = value as i16,
+            0x1B6 => self.extern_volume_right = value as i16,
+            0x1B8 => self.mixer.write_main_volume_left(value as i16),
+            0x1BA => self.mixer.write_main_volume_right(value as i16),
             _ => {
                 eprintln!(
                     "Invalid/unhandled SPU write to register offset: 0x{:X}",
@@ -588,9 +610,16 @@ impl Spu {
 
         let (cd_l, cd_r) = cd_sample;
 
+        // Scale CD audio by CD volume before mixing in
+        let cd_left_scaled =
+            ((cd_l.0 as i32 * self.cd_volume_left as i32) >> 15).clamp(-0x8000, 0x7FFF) as i16;
+        let cd_right_scaled =
+            ((cd_r.0 as i32 * self.cd_volume_right as i32) >> 15).clamp(-0x8000, 0x7FFF) as i16;
+
         // Mix in CD audio last, after voices + reverb
-        let mixed_left = (final_left as i32 + cd_l.0 as i32).clamp(-0x8000, 0x7FFF) as i16;
-        let mixed_right = (final_right as i32 + cd_r.0 as i32).clamp(-0x8000, 0x7FFF) as i16;
+        let mixed_left = (final_left as i32 + cd_left_scaled as i32).clamp(-0x8000, 0x7FFF) as i16;
+        let mixed_right =
+            (final_right as i32 + cd_right_scaled as i32).clamp(-0x8000, 0x7FFF) as i16;
 
         (PcmSample(mixed_left), PcmSample(mixed_right))
     }

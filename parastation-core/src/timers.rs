@@ -34,7 +34,6 @@ impl RootCounter {
     }
 
     fn read_mode(&mut self) -> u16 {
-        // TODO reading should ack mode
         self.mode
     }
 
@@ -107,7 +106,6 @@ impl RootCounter {
         self.clock_accumulator = (total % divisor) as u32;
 
         // Ok, now we increment the current counter and implement the above if needed
-        // TODO can probably do this faster
         let mut remaining = effective_cycles;
         while remaining > 0 {
             let step = remaining.min(u16::MAX as u64);

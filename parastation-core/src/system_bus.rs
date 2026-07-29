@@ -544,7 +544,6 @@ impl SystemBus {
 impl SystemBus {
     /// Tick the system bus, advancing the scheduler and processing any pending peripheral events
     pub fn tick(&mut self, cycles: u32) {
-        // TODO why u32 and u64 mix?
         self.timers
             .tick(cycles as u64, &mut self.interrupt_controller);
         let to_service = self.scheduler.advance(cycles);

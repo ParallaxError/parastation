@@ -62,6 +62,9 @@ mod cdrom_timing {
     pub const READ_INT1_2X: u64 = 0x0036cd2;
 
     pub const SEEK_DELAY: u64 = 0x1E400; // TODO can calculate accurate seek timing?
+
+    // Number of cycles to wait before retrying a command if the previous response was not acknowledged
+    pub const RETRY_CYCLES: u64 = 1000;
 }
 
 /// CD-ROM controller to handle commands and disk access.
@@ -93,6 +96,16 @@ pub struct CdRom {
     // Audio
     pending_cdda_samples: VecDeque<(PcmSample, PcmSample)>, // Pending CDDA samples to be sent to the SPU
     xadpcm_decoder: XadpcmDecoder, // XADPCM decoder for handling XA audio decoding
+
+    cd_vol_ll: u8, // Left-CD-Out to Left-SPU-Input (pending, not yet applied)
+    cd_vol_lr: u8, // Left-CD-Out to Right-SPU-Input
+    cd_vol_rr: u8, // Right-CD-Out to Right-SPU-Input
+    cd_vol_rl: u8, // Right-CD-Out to Left-SPU-Input
+
+    applied_vol_ll: u8,
+    applied_vol_lr: u8,
+    applied_vol_rr: u8,
+    applied_vol_rl: u8,
 }
 
 // Helpers
@@ -152,6 +165,16 @@ impl CdRom {
 
             pending_cdda_samples: VecDeque::new(),
             xadpcm_decoder: XadpcmDecoder::new(),
+
+            cd_vol_ll: 0x7F,
+            cd_vol_lr: 0x7F,
+            cd_vol_rr: 0x7F,
+            cd_vol_rl: 0x7F,
+
+            applied_vol_ll: 0x7F,
+            applied_vol_lr: 0x7F,
+            applied_vol_rr: 0x7F,
+            applied_vol_rl: 0x7F,
         }
     }
 
@@ -256,15 +279,14 @@ impl CdRom {
         scheduler: &mut Scheduler,
         interrupt_controller: &mut InterruptController,
     ) {
-        // TODO Do I need a check here? It should never do a sector read if it's paused since I cancel...
+        // Guard against reading when not in a read state or playing state
         if !self.reading && !self.playing {
             return;
         }
 
         if self.interrupt_flags != 0 {
             // Previous response not acknowledged, so need to retry later
-            // TODO magic
-            scheduler.schedule(SchedulerEvent::CdRomSectorRead, 1000);
+            scheduler.schedule(SchedulerEvent::CdRomSectorRead, cdrom_timing::RETRY_CYCLES);
             return;
         }
 
@@ -291,7 +313,7 @@ impl CdRom {
             // Previous IRQ not acknowledged, so we need to retry this response later
             scheduler.schedule(
                 SchedulerEvent::CdRomResponse { bytes, int_code },
-                1000, // TODO magic
+                cdrom_timing::RETRY_CYCLES,
             );
             return;
         }
@@ -391,10 +413,7 @@ impl CdRom {
             0 => self.write_command_byte(value, scheduler),
             1 => println!("Sound map data out set to {:02X}", value),
             2 => println!("Sound map coding info set to {:02X}", value),
-            3 => println!(
-                "Audio Volume for Right-CD-Out to Right-SPU-Input set to {:02X}",
-                value
-            ),
+            3 => self.cd_vol_rr = value, // Right-CD-Out to Right-SPU-Input
             _ => unreachable!(),
         }
     }
@@ -435,14 +454,25 @@ impl CdRom {
     }
 
     pub fn pull_cd_audio_sample(&mut self) -> (PcmSample, PcmSample) {
-        // Interface similar to above but for audio samples, returning a tuple of left and right samples
-        if let Some(sample) = self.xadpcm_decoder.pending_xa_samples.pop_front() {
-            sample
-        } else if let Some(sample) = self.pending_cdda_samples.pop_front() {
-            sample
-        } else {
-            (PcmSample(0), PcmSample(0)) // buffer underrun - silence
-        }
+        let (raw_l, raw_r) =
+            if let Some(sample) = self.xadpcm_decoder.pending_xa_samples.pop_front() {
+                sample
+            } else if let Some(sample) = self.pending_cdda_samples.pop_front() {
+                sample
+            } else {
+                (PcmSample(0), PcmSample(0)) // buffer underrun - silence
+            };
+
+        let out_l = ((raw_l.0 as i32 * self.applied_vol_ll as i32
+            + raw_r.0 as i32 * self.applied_vol_rl as i32)
+            >> 7)
+            .clamp(-0x8000, 0x7FFF) as i16;
+        let out_r = ((raw_l.0 as i32 * self.applied_vol_lr as i32
+            + raw_r.0 as i32 * self.applied_vol_rr as i32)
+            >> 7)
+            .clamp(-0x8000, 0x7FFF) as i16;
+
+        (PcmSample(out_l), PcmSample(out_r))
     }
 
     fn write_parameter_fifo(&mut self, value: u8) {
@@ -464,14 +494,8 @@ impl CdRom {
         match self.register_index {
             0 => self.write_parameter_fifo(value),
             1 => self.write_interrupt_enable(value),
-            2 => println!(
-                "CD Audio Volume for Left-CD-Out to Left-SPU-Input set to {:02X}",
-                value
-            ),
-            3 => println!(
-                "CD Audio Volume for Right-CD-Out to Left-SPU-Input set to {:02X}",
-                value
-            ),
+            2 => self.cd_vol_ll = value, // Left-CD-Out to Left-SPU-Input
+            3 => self.cd_vol_lr = value, // Right-CD-Out to Left-SPU-Input
             _ => unreachable!(),
         }
     }
@@ -533,11 +557,16 @@ impl CdRom {
         match self.register_index {
             0 => self.write_request_register(value),
             1 => self.write_interrupt_flag_register(value),
-            2 => println!(
-                "CD Audio Volume for Left-CD-Out to Right-SPU-Input set to {:02X}",
-                value
-            ),
-            3 => println!("CD Audio Volume Apply Changes set to {:02X}", value),
+            2 => self.cd_vol_rr = value, // Right-CD-Out to Right-SPU-Input
+            3 => {
+                // Check if bit5 = 1 and apply all volume changes if so
+                if value & (1 << 5) != 0 {
+                    self.applied_vol_ll = self.cd_vol_ll;
+                    self.applied_vol_lr = self.cd_vol_lr;
+                    self.applied_vol_rr = self.cd_vol_rr;
+                    self.applied_vol_rl = self.cd_vol_rl;
+                }
+            }
             _ => unreachable!(),
         }
     }
