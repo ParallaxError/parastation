@@ -16,6 +16,7 @@ struct RootCounter {
     target: u16,
     irq_disabled_until_ack: bool, // Makes the ACK IRQ for one-shot mode level triggered instead of edge triggered
     clock_accumulator: u32,
+    cached_divisor: u32,
 }
 
 impl RootCounter {
@@ -26,6 +27,7 @@ impl RootCounter {
             target: 0,
             irq_disabled_until_ack: false,
             clock_accumulator: 0,
+            cached_divisor: 1,
         }
     }
 
@@ -45,10 +47,20 @@ impl RootCounter {
         self.current = value;
     }
 
-    fn write_mode(&mut self, value: u16) {
+    fn compute_divisor(mode: u16, timer_index: usize) -> u32 {
+        let clock_source = (mode >> 8) & 0b11;
+        match timer_index {
+            1 if clock_source == 1 || clock_source == 3 => 2148,
+            2 if clock_source == 2 || clock_source == 3 => 8,
+            _ => 1,
+        }
+    }
+
+    fn write_mode(&mut self, value: u16, timer_index: usize) {
         self.current = 0; // Reset the counter when the mode is written to
         self.clock_accumulator = 0;
         self.mode = value;
+        self.cached_divisor = Self::compute_divisor(value, timer_index);
     }
 
     fn write_target(&mut self, value: u16) {
@@ -57,6 +69,7 @@ impl RootCounter {
 
     // Advance the counter by a given number of cycles, returning the new current value and whether the target or the
     // max value boundary was crossed
+    #[inline(always)]
     fn advance_one_batch(
         &self,
         step: u16,
@@ -78,19 +91,10 @@ impl RootCounter {
         (end as u16, hit_target, hit_ffff)
     }
 
-    fn clock_divisor(&self, timer_index: usize) -> u32 {
-        let clock_source = (self.mode >> 8) & 0b11;
-        match timer_index {
-            1 if clock_source == 1 || clock_source == 3 => 2148,
-            2 if clock_source == 2 || clock_source == 3 => 8,
-            _ => 1,
-        }
-    }
-
+    #[inline(always)]  
     fn tick(
         &mut self,
         cycles: u64,
-        timer_index: usize,
         interrupt: Interrupt,
         interrupt_controller: &mut InterruptController,
     ) {
@@ -100,12 +104,30 @@ impl RootCounter {
         let reset_on_target = self.mode & (1 << 3) != 0;
 
         // Clock divisor math for timers 1 and 2
-        let divisor = self.clock_divisor(timer_index) as u64;
+        let divisor = self.cached_divisor as u64;
         let total = self.clock_accumulator as u64 + cycles;
         let effective_cycles = total / divisor;
         self.clock_accumulator = (total % divisor) as u32;
 
-        // Ok, now we increment the current counter and implement the above if needed
+        if effective_cycles == 0 {
+            return;
+        }
+
+        let target = self.target;
+        let start = self.current as u64;
+        let end = start + effective_cycles;
+
+        let would_hit_target = target != 0 && start <= target as u64 && target as u64 <= end;
+        let hit_ffff_fast = end > 0xFFFF;
+
+        if !hit_ffff_fast && !(would_hit_target && reset_on_target) {
+            self.current = end as u16;
+            if would_hit_target && irq_on_target {
+                interrupt_controller.raise_interrupt(interrupt);
+            }
+            return;
+        }
+
         let mut remaining = effective_cycles;
         while remaining > 0 {
             let step = remaining.min(u16::MAX as u64);
@@ -172,7 +194,7 @@ impl Timers {
         let counter = &mut self.counters[timer];
         match offset {
             0 => counter.write_current(value),
-            4 => counter.write_mode(value),
+            4 => counter.write_mode(value, timer),
             8 => counter.write_target(value),
             _ => eprintln!(
                 "Write to invalid timer register offset {offset:#x} for timer {timer} with value {value:#x}"
@@ -181,9 +203,8 @@ impl Timers {
     }
 
     pub fn tick(&mut self, cycles: u64, ic: &mut InterruptController) {
-        for i in 0..3 {
-            let irq = Self::irq_for(i);
-            self.counters[i].tick(cycles, i, irq, ic);
-        }
+        self.counters[0].tick(cycles, Interrupt::TMR0, ic);
+        self.counters[1].tick(cycles, Interrupt::TMR1, ic);
+        self.counters[2].tick(cycles, Interrupt::TMR2, ic);
     }
 }

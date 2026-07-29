@@ -42,6 +42,7 @@ enum AccessWidth {
 /// For the CPU, just exposes read and write interfaces for memory access.
 pub struct SystemBus {
     scheduler: Scheduler,
+    scratch_events: Vec<SchedulerEvent>, // Scratch space for events to service
 
     // Owned memories
     bios: Bios,
@@ -73,6 +74,7 @@ impl SystemBus {
 
         Self {
             scheduler,
+            scratch_events: Vec::new(),
             bios,
             ram: Ram::new(),
             scratchpad: Scratchpad::new(),
@@ -215,7 +217,7 @@ impl SystemBus {
         0
     }
 
-    fn write_hardware(&mut self, addr: u32, value: u32, width: AccessWidth) {
+    fn write_hardware(&mut self, addr: u32, value: u32, _width: AccessWidth) {
         if let Some(_offset) = MEMORY_CONTROL_1.contains(addr) {
             return;
         } // Absorb writes to memory control 1, just gonna hardware. HACK
@@ -546,10 +548,10 @@ impl SystemBus {
     pub fn tick(&mut self, cycles: u32) {
         self.timers
             .tick(cycles as u64, &mut self.interrupt_controller);
-        let to_service = self.scheduler.advance(cycles);
+        self.scheduler.advance(cycles, &mut self.scratch_events);
 
         // Process any events that require servicing, hopefully slippage was minimal
-        for event in to_service {
+        for event in self.scratch_events.drain(..) {
             match event {
                 SchedulerEvent::VBlank => {
                     self.interrupt_controller.raise_interrupt(Interrupt::VBlank);

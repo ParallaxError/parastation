@@ -72,17 +72,17 @@ impl Scheduler {
     }
 
     /// Advance the scheduler by the given number of cycles and return an iterator of events that require dispatching
-    pub fn advance(&mut self, cycles: u32) -> Vec<SchedulerEvent> {
+    pub fn advance(&mut self, cycles: u32, out: &mut Vec<SchedulerEvent>) {
         self.current_cycle += cycles as u64;
-        let mut fired = Vec::new();
+        out.clear();
+
         while let Some(e) = self.events.peek() {
             if e.deadline <= self.current_cycle {
-                fired.push(self.events.pop().unwrap().kind);
+                out.push(self.events.pop().unwrap().kind);
             } else {
                 break;
             }
         }
-        fired
     }
 
     /// Cancel any future events that satisfy the given predicate

@@ -29,7 +29,7 @@ fn main() {
     let mut runner = Runner::new(&event_loop, bios);
     runner.set_uncapped(true);
 
-    runner.insert_cdrom_disc(r"games/TonyHawk/Tony Hawk's Skateboarding.cue");
+    runner.insert_cdrom_disc(r"games/Crash/Crash Bandicoot.cue");
     // runner.run_until_pc_and_load_exe(0x80030000, r"tests/mdec/frame/frame-24bit-dma.exe");
     runner.run(event_loop);
 }
