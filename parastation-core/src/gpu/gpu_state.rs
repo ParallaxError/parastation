@@ -202,6 +202,79 @@ impl Default for DisplayState {
     }
 }
 
+// Passed to the GPU backend to describe how the display should be presented
+pub struct DisplayOutput {
+    pub enabled: bool,
+    pub vram_x: u16,
+    pub vram_y: u16,
+    pub width_px: u16,
+    pub height_px: u16,
+    pub colour_depth: bool,        // false = 15bpp, true = 24bpp
+    pub display_aspect_ratio: f32, // width:height ratio the output should be presented at
+}
+
+impl DisplayState {
+    // NTSC analog TV horizontal sampling rate for 1:1 aspect ratio
+    // https://github.com/libretro/beetle-psx-libretro/issues/510
+    const NTSC_1_1_PAR_240P_HZ: f64 = 135_000_000.0 / 22.0;
+
+    // https://psx-spx.consoledev.net/graphicsprocessingunitgpu/
+    const fn gpu_dotclock_hz(width_px: u16) -> f64 {
+        const BASE: f64 = 44_100.0 * 0x300 as f64 * 11.0 / 7.0;
+        let divider: f64 = match width_px {
+            256 => 10.0,
+            320 => 8.0,
+            368 => 7.0,
+            512 => 5.0,
+            640 => 4.0,
+            _ => 8.0, // fall back to 320's divider
+        };
+        BASE / divider
+    }
+
+    /// Get the pixel aspect ratio at 240p for a given horizontal resolution, derived from how fast the GPU dotclock
+    /// is compared to the NTSC 1:1 aspect ratio dotclock
+    const fn pixel_aspect_ratio_240p(width_px: u16) -> f64 {
+        Self::NTSC_1_1_PAR_240P_HZ / Self::gpu_dotclock_hz(width_px)
+    }
+
+    /// Get the display output parameters based on the current display state
+    pub fn derive_output(&self) -> DisplayOutput {
+        let width_px: u16 = if self.horizontal_resolution_2 {
+            368
+        } else {
+            match self.horizontal_resolution_1 & 0x3 {
+                0 => 256,
+                1 => 320,
+                2 => 512,
+                3 => 640,
+                _ => unreachable!(),
+            }
+        };
+
+        let interlaced_480 = self.vertical_resolution && self.vertical_interlace;
+        let height_px: u16 = if interlaced_480 { 480 } else { 240 };
+
+        let mut par = Self::pixel_aspect_ratio_240p(width_px);
+        if interlaced_480 {
+            par *= 2.0;
+        }
+
+        // Display aspect ratio = (width_px * PAR) / height_px
+        let display_aspect_ratio = (width_px as f64 * par / height_px as f64) as f32;
+
+        DisplayOutput {
+            enabled: !self.display_enable, // (0=On, 1=Off)
+            vram_x: self.display_start_x,
+            vram_y: self.display_start_y,
+            width_px,
+            height_px,
+            colour_depth: self.display_colour_depth,
+            display_aspect_ratio,
+        }
+    }
+}
+
 /// GPU state encapsulation struct. Holds all stateful registers on the PS1 GPU.
 #[derive(Debug, Clone, Default)]
 pub struct GpuState {

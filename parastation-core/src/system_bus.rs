@@ -469,11 +469,17 @@ impl SystemBus {
 impl SystemBus {
     fn execute_dma_transfer(&mut self, transfer: DmaTransfer) -> bool {
         match transfer {
-            DmaTransfer::OtcFill { base_addr, word_count } => {
+            DmaTransfer::OtcFill {
+                base_addr,
+                word_count,
+            } => {
                 self.dma_otc(base_addr, word_count);
                 true
             }
-            DmaTransfer::CdromToRam { dest_addr, word_count } => {
+            DmaTransfer::CdromToRam {
+                dest_addr,
+                word_count,
+            } => {
                 self.dma_cdrom_to_ram(dest_addr, word_count);
                 true
             }
@@ -481,28 +487,42 @@ impl SystemBus {
                 self.dma_gpu_linked_list(list_addr);
                 true
             }
-            DmaTransfer::GpuVramWrite { src_addr, word_count } => {
+            DmaTransfer::GpuVramWrite {
+                src_addr,
+                word_count,
+            } => {
                 self.dma_gpu_vram_write(src_addr, word_count);
                 true
             }
-            DmaTransfer::GpuVramRead { dest_addr, word_count } => {
+            DmaTransfer::GpuVramRead {
+                dest_addr,
+                word_count,
+            } => {
                 self.dma_gpu_vram_read(dest_addr, word_count);
                 true
             }
-            DmaTransfer::SpuWrite { src_addr, word_count } => {
+            DmaTransfer::SpuWrite {
+                src_addr,
+                word_count,
+            } => {
                 self.dma_spu_write(src_addr, word_count);
                 true
             }
-            DmaTransfer::SpuRead { dest_addr, word_count } => {
+            DmaTransfer::SpuRead {
+                dest_addr,
+                word_count,
+            } => {
                 self.dma_spu_read(dest_addr, word_count);
                 true
             }
-            DmaTransfer::MdecIn { src_addr, word_count } => {
-                self.dma_mdec_in(src_addr, word_count) == word_count
-            }
-            DmaTransfer::MdecOut { dest_addr, word_count } => {
-                self.dma_mdec_out(dest_addr, word_count) == word_count
-            }
+            DmaTransfer::MdecIn {
+                src_addr,
+                word_count,
+            } => self.dma_mdec_in(src_addr, word_count) == word_count,
+            DmaTransfer::MdecOut {
+                dest_addr,
+                word_count,
+            } => self.dma_mdec_out(dest_addr, word_count) == word_count,
         }
     }
 

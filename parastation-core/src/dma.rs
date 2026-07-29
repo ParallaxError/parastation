@@ -323,7 +323,7 @@ impl DmaController {
 
         // dicr31 = dicr15 OR (dicr23 AND dicr(24-30) != 0)
         // Earlier I had bits 16-22 (per channel enable) gating a flag bit, but that is NOT the case
-        // 16-22 only gate whether the bits get set when a channel completes, but once set they can trigger an 
+        // 16-22 only gate whether the bits get set when a channel completes, but once set they can trigger an
         // interrupt regardless of the enable bits
         if force_irq || (master_enable && channel_irq_flags != 0) {
             self.dicr |= 1 << 31;
@@ -454,7 +454,6 @@ impl DmaController {
         }
 
         self.recalculate_master_irq();
-
 
         let now_pending = self.irq_pending();
         if !prev_irq_pending && now_pending {

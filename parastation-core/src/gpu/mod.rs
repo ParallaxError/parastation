@@ -12,7 +12,7 @@ use std::cell::Cell;
 
 mod gpu_state;
 pub use gpu_state::Mask;
-pub use gpu_state::{DrawMode, DrawingArea, DrawingOffset, GpuState, TextureWindow};
+pub use gpu_state::{DisplayOutput, DrawMode, DrawingArea, DrawingOffset, GpuState, TextureWindow};
 mod rendering_parameters;
 pub use rendering_parameters::*;
 pub mod backend;
@@ -404,35 +404,9 @@ impl Gpu {
 
 // GP0 drawing commands
 impl Gpu {
-    fn display_width(&self) -> u16 {
-        if self.state.display_state.horizontal_resolution_2 {
-            368
-        } else {
-            match self.state.display_state.horizontal_resolution_1 {
-                0 => 256,
-                1 => 320,
-                2 => 512,
-                3 => 640,
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    fn display_height(&self) -> u16 {
-        if self.state.display_state.vertical_resolution {
-            480
-        } else {
-            240
-        }
-    }
-
     pub fn display(&mut self) {
-        self.backend.present(
-            self.state.display_state.display_start_x,
-            self.state.display_state.display_start_y,
-            self.display_width(),
-            self.display_height(),
-        );
+        self.backend
+            .present(&self.state.display_state.derive_output());
     }
 
     fn get_draw_params(&self) -> DrawParams {

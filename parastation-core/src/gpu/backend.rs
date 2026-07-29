@@ -10,7 +10,7 @@
  */
 
 // Imports
-use crate::gpu::gpu_state::Mask;
+use crate::gpu::gpu_state::{DisplayOutput, Mask};
 use crate::gpu::rendering_parameters::*;
 
 pub trait GpuBackend {
@@ -60,5 +60,5 @@ pub trait GpuBackend {
 
     // Display methods
     /// Present the display area in VRAM to the screen
-    fn present(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16);
+    fn present(&mut self, display_output: &DisplayOutput);
 }

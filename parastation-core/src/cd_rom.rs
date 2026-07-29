@@ -108,7 +108,11 @@ fn lba_to_msf_bcd(lba: u32) -> (u8, u8, u8) {
     let minutes = (lba / 75 / 60) as u8;
     let seconds = ((lba / 75) % 60) as u8;
     let sectors = (lba % 75) as u8;
-    (decimal_to_bcd(minutes), decimal_to_bcd(seconds), decimal_to_bcd(sectors))
+    (
+        decimal_to_bcd(minutes),
+        decimal_to_bcd(seconds),
+        decimal_to_bcd(sectors),
+    )
 }
 
 fn bcd_to_decimal(bcd: u8) -> u8 {
@@ -1148,7 +1152,7 @@ impl CdRom {
             3,
             scheduler,
         );
-    } 
+    }
 
     // 0x13
     fn cmd_gettn(&mut self, scheduler: &mut Scheduler) {

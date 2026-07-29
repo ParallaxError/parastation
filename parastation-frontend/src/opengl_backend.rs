@@ -65,6 +65,7 @@ struct PresentUniforms {
     display_size: Option<glow::UniformLocation>,
     screen_offset: Option<glow::UniformLocation>,
     screen_size: Option<glow::UniformLocation>,
+    display_depth: Option<glow::UniformLocation>,
 }
 
 pub struct OpenGlBackend {
@@ -299,6 +300,7 @@ impl OpenGlBackend {
                 display_size: gl.get_uniform_location(present_program, "display_size"),
                 screen_offset: gl.get_uniform_location(present_program, "screen_offset"),
                 screen_size: gl.get_uniform_location(present_program, "screen_size"),
+                display_depth: gl.get_uniform_location(present_program, "display_depth"),
             };
 
             Self {
@@ -1159,11 +1161,7 @@ impl GpuBackend for OpenGlBackend {
         }
     }
 
-    fn present(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16) {
-        // let vram_x = 0;
-        // let vram_y = 0;
-        // let w = 1024;
-        // let h = 512;
+    fn present(&mut self, output: &DisplayOutput) {
         unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             self.gl.disable(glow::SCISSOR_TEST);
@@ -1171,8 +1169,16 @@ impl GpuBackend for OpenGlBackend {
             let win_w = self.window_width as f32;
             let win_h = self.window_height as f32;
 
-            // We want to scale the 4:3 PS1 output to fit the window, while maintaining aspect ratio
-            let target_aspect = 4.0 / 3.0;
+            self.gl
+                .viewport(0, 0, self.window_width as i32, self.window_height as i32);
+            self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
+            self.gl.clear(glow::COLOR_BUFFER_BIT);
+
+            if !output.enabled {
+                return;
+            }
+
+            let target_aspect = output.display_aspect_ratio;
             let win_aspect = win_w / win_h;
 
             let (dest_w, dest_h, dest_x, dest_y) = if win_aspect > target_aspect {
@@ -1184,11 +1190,6 @@ impl GpuBackend for OpenGlBackend {
                 let y_offset = (win_h - scaled_h) / 2.0;
                 (win_w, scaled_h, 0.0, y_offset)
             };
-
-            self.gl
-                .viewport(0, 0, self.window_width as i32, self.window_height as i32);
-            self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
-            self.gl.clear(glow::COLOR_BUFFER_BIT);
 
             let ndc_x = (dest_x / win_w) * 2.0 - 1.0;
             let ndc_y = 1.0 - (dest_y / win_h) * 2.0;
@@ -1202,15 +1203,19 @@ impl GpuBackend for OpenGlBackend {
 
             self.gl
                 .uniform_1_i32(self.present_uniforms.vram.as_ref(), 0);
+            self.gl.uniform_1_i32(
+                self.present_uniforms.display_depth.as_ref(),
+                output.colour_depth as i32,
+            );
             self.gl.uniform_2_f32(
                 self.present_uniforms.display_origin.as_ref(),
-                vram_x as f32 / 1024.0,
-                vram_y as f32 / 512.0,
+                output.vram_x as f32 / 1024.0,
+                output.vram_y as f32 / 512.0,
             );
             self.gl.uniform_2_f32(
                 self.present_uniforms.display_size.as_ref(),
-                w as f32 / 1024.0,
-                h as f32 / 512.0,
+                output.width_px as f32 / 1024.0,
+                output.height_px as f32 / 512.0,
             );
             self.gl.uniform_2_f32(
                 self.present_uniforms.screen_offset.as_ref(),
