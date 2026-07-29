@@ -12,6 +12,8 @@
 // Imports
 use std::collections::VecDeque;
 
+use crate::elog;
+
 // https://psx-spx.consoledev.net/macroblockdecodermdec/#mdec-decompression
 // Constant tables
 // ^ this above is comments from when I was fruitlessly following psx-spx.
@@ -115,7 +117,7 @@ impl Mdec {
             0x00 => self.read_data_out(),
             0x04 => self.read_status(),
             _ => {
-                eprintln!("Invalid MDEC register read: 0x{:08X}", offset);
+                elog!("Invalid MDEC register read: 0x{:08X}", offset);
                 0
             }
         }
@@ -126,7 +128,7 @@ impl Mdec {
             0x00 => self.write_command_param(value),
             0x04 => self.write_control(value),
             _ => {
-                eprintln!("Invalid MDEC register write: 0x{:08X}", offset)
+                elog!("Invalid MDEC register write: 0x{:08X}", offset)
             }
         }
     }
@@ -762,7 +764,7 @@ impl Mdec {
                 }
             }
             _ => {
-                eprintln!("Unsupported output depth: {}", depth);
+                elog!("Unsupported output depth: {}", depth);
             }
         }
     }

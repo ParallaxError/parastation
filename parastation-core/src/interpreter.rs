@@ -155,9 +155,7 @@ impl Backend for Interpreter {
             || (pc == 0xB0 && cpu.read_reg(MipsRegister(9)) == 0x3D)
         {
             let ch = (cpu.read_reg(MipsRegister(4)) & 0xFF) as u8 as char;
-            print!("{}", ch);
-            use std::io::Write;
-            std::io::stdout().flush().ok();
+            crate::logging::tty_putchar(ch);
         }
 
         // Increment PC
@@ -255,7 +253,6 @@ impl Interpreter {
         let addr = cpu.read_reg(base).wrapping_add(offset as u32);
 
         if addr % 4 != 0 {
-            println!("Unaligned load at address {:08X}, raising exception", addr);
             self.trigger_exception(cpu, EXCEPTION_ADEL);
             return;
         }

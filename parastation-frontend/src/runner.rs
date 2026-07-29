@@ -12,7 +12,7 @@
 use std::time::{Duration, Instant};
 
 use parastation_core::bios::Bios;
-use parastation_core::{Interpreter, Ps1};
+use parastation_core::{DiscSource, Interpreter, Ps1};
 
 use glutin::config::ConfigTemplateBuilder;
 use glutin::context::{ContextAttributesBuilder, PossiblyCurrentContext};
@@ -31,6 +31,40 @@ use crate::gl_texture_barrier::RawGlExt;
 use crate::keyboard_input_provider::{DummyInputProvider, KeyboardInputProvider, KeyboardState};
 use crate::opengl_backend::OpenGlBackend;
 use crate::spu_backend::CpalSpuBackend;
+
+// File acquisition methods for the CD-ROM drive, using std::fs::File and std::io::Read + Seek to read from the disc
+// image files
+struct NativeFile(std::fs::File);
+
+impl DiscSource for NativeFile {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> usize {
+        use std::io::{Read, Seek, SeekFrom};
+        if self.0.seek(SeekFrom::Start(offset)).is_err() {
+            return 0;
+        }
+        self.0.read(buf).unwrap_or(0)
+    }
+
+    fn len(&self) -> u64 {
+        self.0.metadata().map(|m| m.len()).unwrap_or(0)
+    }
+}
+
+struct NativeLogger;
+
+impl parastation_core::logging::Logger for NativeLogger {
+    fn log(&self, message: &str) {
+        println!("{message}");
+    }
+    fn elog(&self, message: &str) {
+        eprintln!("{message}");
+    }
+    fn tty_putchar(&self, ch: char) {
+        print!("{ch}");
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+    }
+}
 
 // Target framerate and parameters
 const TARGET_FPS: f64 = 60.0;
@@ -137,6 +171,8 @@ impl Runner {
             Box::new(keyboard_input_provider),
             Box::new(DummyInputProvider),
         );
+
+        parastation_core::logging::set_logger(Box::new(NativeLogger));
 
         let frame_duration = Duration::from_secs_f64(1.0 / TARGET_FPS);
         let next_frame_time = Instant::now() + frame_duration;
@@ -263,7 +299,17 @@ impl Runner {
 // PS1 exposed methods
 impl Runner {
     pub fn insert_cdrom_disc(&mut self, cue_path: &str) {
-        self.ps1.insert_cdrom_disc(cue_path);
+        let cue_content = std::fs::read_to_string(cue_path).expect("Failed to read CUE file");
+        let cue_directory = std::path::Path::new(cue_path)
+            .parent()
+            .unwrap()
+            .to_path_buf();
+
+        self.ps1.insert_cdrom_disc(&cue_content, |filename| {
+            let file_path = cue_directory.join(filename);
+            let file = std::fs::File::open(file_path).expect("Failed to open disc image file");
+            Box::new(NativeFile(file))
+        });
     }
 
     pub fn run_until_pc_and_load_exe(&mut self, target_pc: u32, exe_path: &str) {

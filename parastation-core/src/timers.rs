@@ -7,6 +7,7 @@
  */
 
 // Imports
+use crate::elog;
 use crate::interrupt_controller::{Interrupt, InterruptController};
 
 #[derive(Clone, Copy, Default)]
@@ -91,7 +92,7 @@ impl RootCounter {
         (end as u16, hit_target, hit_ffff)
     }
 
-    #[inline(always)]  
+    #[inline(always)]
     fn tick(
         &mut self,
         cycles: u64,
@@ -184,7 +185,7 @@ impl Timers {
             4 => counter.read_mode() as u32,
             8 => counter.read_target() as u32,
             _ => {
-                eprintln!("Read from invalid timer register offset {offset:#x} for timer {timer}");
+                elog!("Read from invalid timer register offset {offset:#x} for timer {timer}");
                 0
             }
         }
@@ -196,7 +197,7 @@ impl Timers {
             0 => counter.write_current(value),
             4 => counter.write_mode(value, timer),
             8 => counter.write_target(value),
-            _ => eprintln!(
+            _ => elog!(
                 "Write to invalid timer register offset {offset:#x} for timer {timer} with value {value:#x}"
             ),
         }

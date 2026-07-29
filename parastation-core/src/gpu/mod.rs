@@ -10,6 +10,8 @@
 // Imports
 use std::cell::Cell;
 
+use crate::elog;
+
 mod gpu_state;
 pub use gpu_state::Mask;
 pub use gpu_state::{DisplayOutput, DrawMode, DrawingArea, DrawingOffset, GpuState, TextureWindow};
@@ -253,7 +255,7 @@ impl Gpu {
             Gp0Command::CopyRect => self.copy_rect(),
 
             Gp0Command::SetRenderingAttribute => self.set_rendering_attribute(),
-            _ => eprintln!(
+            _ => elog!(
                 "GP0 command execution not implemented: {:?}, gp0_buffer: {:X?}",
                 command, self.gp0_buffer
             ),
@@ -272,7 +274,7 @@ impl Gpu {
             0xE4 => self.state.drawing_area.set_bottom_right(self.gp0_buffer[0]),
             0xE5 => self.state.drawing_offset = DrawingOffset::from_gp0_command(self.gp0_buffer[0]),
             0xE6 => self.state.mask = Mask::from_gp0_command(self.gp0_buffer[0]),
-            _ => eprintln!("Unknown GP0 rendering attribute command: 0x{:02X}", cmd),
+            _ => elog!("Unknown GP0 rendering attribute command: 0x{:02X}", cmd),
         }
     }
 }
@@ -1334,7 +1336,7 @@ impl Gpu {
             }
 
             0x10..=0x1F => self.gp1_get_gpu_info(word & 0xFF),
-            _ => eprintln!("GP1 command not implemented: 0x{:02X}", command_id),
+            _ => elog!("GP1 command not implemented: 0x{:02X}", command_id),
         }
     }
 

@@ -9,6 +9,7 @@
  * -----
  */
 
+use crate::elog;
 use crate::cpu::MipsRegister;
 use crate::cpu::cop0::Cop0Register;
 use crate::cpu::gte::GteRegister;
@@ -763,7 +764,7 @@ impl IrOp {
             },
             // CFC0 - not on PS1
             0x02 => {
-                eprintln!("CFC0 not supported on PS1");
+                elog!("CFC0 not supported on PS1");
                 IrOp::Unimplemented(raw)
             }
             // MTC0
@@ -773,7 +774,7 @@ impl IrOp {
             },
             // CTC0 - not on PS1
             0x06 => {
-                eprintln!("CTC0 not supported on PS1");
+                elog!("CTC0 not supported on PS1");
                 IrOp::Unimplemented(raw)
             }
             // BCnF/BCnT
@@ -781,7 +782,7 @@ impl IrOp {
                 0x00 => IrOp::Unimplemented(raw), // BCnF - not used on PS1
                 0x01 => IrOp::Unimplemented(raw), // BCnT - not used on PS1
                 rt => {
-                    eprintln!("Unknown BC0 rt {rt:#04x}");
+                    elog!("Unknown BC0 rt {rt:#04x}");
                     IrOp::Unimplemented(raw)
                 }
             },
@@ -793,12 +794,12 @@ impl IrOp {
                 0x08 => IrOp::Unimplemented(raw), // TLBP  - not on PS1
                 0x10 => IrOp::Rfe,
                 cmd => {
-                    eprintln!("Unknown COP0 command {cmd:#04x}");
+                    elog!("Unknown COP0 command {cmd:#04x}");
                     IrOp::Unimplemented(raw)
                 }
             },
             rs => {
-                eprintln!("Unknown COP0 rs {rs:#04x}");
+                elog!("Unknown COP0 rs {rs:#04x}");
                 IrOp::Unimplemented(raw)
             }
         }
@@ -831,7 +832,7 @@ impl IrOp {
                 0x00 => IrOp::Unimplemented(raw), // BCnF
                 0x01 => IrOp::Unimplemented(raw), // BCnT
                 rt => {
-                    eprintln!("Unknown BC2 rt {rt:#04x}");
+                    elog!("Unknown BC2 rt {rt:#04x}");
                     IrOp::Unimplemented(raw)
                 }
             },
@@ -840,7 +841,7 @@ impl IrOp {
                 command: raw & 0x1FFFFFF,
             },
             rs => {
-                eprintln!("Unknown COP2 rs {rs:#04x}");
+                elog!("Unknown COP2 rs {rs:#04x}");
                 IrOp::Unimplemented(raw)
             }
         }

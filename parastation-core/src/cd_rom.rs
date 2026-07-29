@@ -9,9 +9,8 @@
 
 // Imports
 use std::collections::VecDeque;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 
+use crate::{log, elog};
 use crate::interrupt_controller::{Interrupt, InterruptController};
 use crate::scheduler::{Scheduler, SchedulerEvent};
 use crate::spu::PcmSample;
@@ -19,10 +18,20 @@ use crate::xadpcm::{XaSubHeader, XadpcmDecoder};
 
 pub const SECTOR_SIZE: usize = 2352; // Size of a CD-ROM sector in bytes
 
+/// Abstracts reading raw bytes from a disc image file, so the frontend can provide its own implementation to make the
+/// core platform agnostic.
+pub trait DiscSource {
+    /// Read buf.len() bytes starting from offset within this specific file. Returns the number of bytes read
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> usize;
+
+    /// Total size of this file in bytes, if known. Used to calculate sector counts.
+    fn len(&self) -> u64;
+}
+
 /// Inserted disc structure, represented by a file and a list of tracks.
 struct Disc {
-    file: Vec<File>,    // File handles for the disc image
-    tracks: Vec<Track>, // List of tracks on the disc
+    files: Vec<Box<dyn DiscSource>>, // File handles for the disc image
+    tracks: Vec<Track>,              // List of tracks on the disc
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -179,26 +188,23 @@ impl CdRom {
     }
 
     /// Read a CUE file from the given path and parse it into a Disc structure
-    pub fn insert_disc(&mut self, path: &str) {
+    pub fn insert_disc(
+        &mut self,
+        cue_content: &str,
+        mut open_file: impl FnMut(&str) -> Box<dyn DiscSource>,
+    ) {
         // https://github.com/opsxcq/psx-cue-sbi-collection
-        // First, acquire the CUE file and parse it to get the track information
-        // CUE is pretty simple, commands giving .bin locations and track information
-        let content = std::fs::read_to_string(path).expect("Failed to read CUE file");
-        let cue_directory = std::path::Path::new(path).parent().unwrap();
-
-        // Need to accumulate our file descriptors as we acquire them as well as tracks
-        let mut files: Vec<File> = Vec::new();
+        let mut files: Vec<Box<dyn DiscSource>> = Vec::new();
         let mut tracks: Vec<Track> = Vec::new();
 
         let mut current_file_index: usize = 0;
         let mut current_track_number: u8 = 0;
         let mut current_track_type: TrackType = TrackType::Data;
-
         // Track the LBA where the current file begins so that we can calculate the file offset for each track
         let mut current_file_base_lba: u32 = 0;
 
         // Now we read tokens as space separated, and match FILEs, TRACKs, and INDEXes
-        for line in content.lines() {
+        for line in cue_content.lines() {
             let tokens: Vec<&str> = line.split_whitespace().collect();
             if tokens.is_empty() {
                 continue;
@@ -212,13 +218,11 @@ impl CdRom {
                     let filename = &line[start + 1..end];
 
                     if let Some(prev_file) = files.last() {
-                        let file_size = prev_file.metadata().map(|m| m.len()).unwrap_or(0);
-                        let sector_count = (file_size / SECTOR_SIZE as u64) as u32;
+                        let sector_count = (prev_file.len() / SECTOR_SIZE as u64) as u32;
                         current_file_base_lba += sector_count;
                     }
 
-                    let file_path = cue_directory.join(filename);
-                    let file = File::open(file_path).expect("Failed to open disc image file");
+                    let file = open_file(filename);
                     files.push(file);
                     current_file_index = files.len() - 1;
                 }
@@ -235,7 +239,7 @@ impl CdRom {
                     let index_number: u8 = tokens[1].parse().unwrap();
                     if index_number != 1 {
                         continue;
-                    } // only care about INDEX 01
+                    }
 
                     let time_parts: Vec<&str> = tokens[2].split(':').collect();
                     let minutes: u8 = time_parts[0].parse().unwrap();
@@ -244,10 +248,9 @@ impl CdRom {
 
                     let local_lba = msf_to_lba(minutes, seconds, frames);
                     let file_offset = local_lba as u64 * SECTOR_SIZE as u64;
-
                     let global_start_lba = current_file_base_lba + local_lba;
 
-                    println!(
+                    log!(
                         "Parsed track {}: start_lba={}, file_index={}, file_offset={}",
                         current_track_number, global_start_lba, current_file_index, file_offset
                     );
@@ -255,19 +258,19 @@ impl CdRom {
                     tracks.push(Track {
                         track_number: current_track_number,
                         start_logical_block: global_start_lba,
-                        track_type: current_track_type.clone(),
+                        track_type: current_track_type,
                         file_index: current_file_index,
                         file_offset,
                     });
                 }
                 _ => {
-                    println!("Unrecognized CUE command: {}", tokens[0]);
+                    log!("Unrecognized CUE command: {}", tokens[0]);
                 }
             }
         }
 
         self.disc = Some(Disc {
-            file: files,
+            files: files,
             tracks,
         });
     }
@@ -411,8 +414,8 @@ impl CdRom {
     fn write_offset_1(&mut self, value: u8, scheduler: &mut Scheduler) {
         match self.register_index {
             0 => self.write_command_byte(value, scheduler),
-            1 => println!("Sound map data out set to {:02X}", value),
-            2 => println!("Sound map coding info set to {:02X}", value),
+            1 => log!("Sound map data out set to {:02X}", value),
+            2 => log!("Sound map coding info set to {:02X}", value),
             3 => self.cd_vol_rr = value, // Right-CD-Out to Right-SPU-Input
             _ => unreachable!(),
         }
@@ -428,7 +431,7 @@ impl CdRom {
     pub fn read_data_fifo(&mut self) -> u8 {
         // First, we need to see if the data FIFO even has anything
         if !self.data_fifo_loaded || self.data_buffer.is_empty() {
-            // println!("Loaded = {}, Buffer empty = {:?}", self.data_fifo_loaded, self.data_buffer.is_empty());
+            // log!("Loaded = {}, Buffer empty = {:?}", self.data_fifo_loaded, self.data_buffer.is_empty());
             return 0; // Software really shouldn't reach here if it followed protocol
         }
 
@@ -479,7 +482,7 @@ impl CdRom {
         if self.command_args.len() < 16 {
             self.command_args.push(value);
         } else {
-            eprintln!(
+            elog!(
                 "Warning: Parameter FIFO overflow, ignoring value {:02X}",
                 value
             );
@@ -527,7 +530,7 @@ impl CdRom {
         */
 
         if value & (1 << 5) != 0 {
-            eprintln!("Request Register: Want Command Start Interrupt on Next Command");
+            elog!("Request Register: Want Command Start Interrupt on Next Command");
         }
 
         // Weird behaviour from this bug
@@ -750,10 +753,8 @@ impl CdRom {
         let byte_offset = track.file_offset + sector_offset_in_track * SECTOR_SIZE as u64;
 
         // And perform the read from the file
-        let file = &mut disc.file[track.file_index];
-        if file.seek(SeekFrom::Start(byte_offset)).is_ok() {
-            let _ = file.read_exact(&mut buf);
-        }
+        let file = &mut disc.files[track.file_index];
+        file.read_at(byte_offset, &mut buf);
 
         buf
     }
@@ -811,7 +812,7 @@ impl CdRom {
             0x19 => self.cmd_test(scheduler),
             0x1A => self.cmd_getid(scheduler),
             0x1B => self.cmd_reads(scheduler),
-            _ => eprintln!("Unrecognized CD-ROM command 0x{:02X}", cmd),
+            _ => elog!("Unrecognized CD-ROM command 0x{:02X}", cmd),
         }
         self.command_args.clear(); // Clear the parameter FIFO after executing the command
     }
@@ -1268,8 +1269,8 @@ impl CdRom {
             {
                 next_track.start_logical_block.saturating_sub(1)
             } else {
-                let file = &disc.file[last_track.file_index];
-                let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
+                let file = &disc.files[last_track.file_index];
+                let file_size = file.len();
                 let sector_count = (file_size / SECTOR_SIZE as u64) as u32;
                 last_track
                     .start_logical_block
@@ -1384,7 +1385,7 @@ impl CdRom {
                 self.schedule_event(cdrom_timing::DEFAULT_FIRST, response.to_vec(), 3, scheduler);
             }
             _ => {
-                eprintln!("Unrecognized CD-ROM TEST subcommand 0x{:02X}", subcommand);
+                elog!("Unrecognized CD-ROM TEST subcommand 0x{:02X}", subcommand);
                 self.schedule_event(cdrom_timing::DEFAULT_FIRST, vec![0xFF], 3, scheduler); // Default response
             }
         }

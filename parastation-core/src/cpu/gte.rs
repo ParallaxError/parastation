@@ -10,6 +10,7 @@
  */
 
 // Imports
+use crate::elog;
 use crate::cpu::gte_div::gte_divide;
 
 #[derive(Debug)]
@@ -442,7 +443,7 @@ impl Gte {
             0x3D => self.gpf(sf, lm),
             0x3E => self.gpl(sf, lm),
             0x3F => self.ncct(sf, lm),
-            _ => eprintln!("Unimplemented GTE command: {:02X}", opcode),
+            _ => elog!("Unimplemented GTE command: {:02X}", opcode),
         }
     }
 }

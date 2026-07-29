@@ -20,10 +20,9 @@ fn main() {
         std::process::exit(1);
     }
 
-    let bios = Bios::load_from_file(&args[1]).unwrap_or_else(|e| {
-        eprintln!("Failed to load BIOS: {e}");
-        std::process::exit(1);
-    });
+    // Load bios data into a Box<[u8]> and create a Bios instance
+    let bios_data = std::fs::read(&args[1]).expect("Failed to read BIOS file");
+    let bios = Bios::new(bios_data.into_boxed_slice());
 
     let event_loop = EventLoop::new().unwrap();
     let mut runner = Runner::new(&event_loop, bios);

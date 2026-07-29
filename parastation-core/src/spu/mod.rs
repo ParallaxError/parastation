@@ -23,6 +23,7 @@ use reverb::Reverb;
 mod noise;
 use noise::NoiseGenerator;
 
+use crate::elog;
 use crate::interrupt_controller::{Interrupt, InterruptController};
 
 // Shared SPU structures
@@ -173,7 +174,7 @@ impl Spu {
             0x1B8 => self.mixer.read_main_volume_left() as u16,
             0x1BA => self.mixer.read_main_volume_right() as u16,
             _ => {
-                eprintln!(
+                elog!(
                     "Invalid/unhandled SPU read from register offset: 0x{:X}",
                     offset
                 );
@@ -248,7 +249,7 @@ impl Spu {
             0x1B8 => self.mixer.write_main_volume_left(value as i16),
             0x1BA => self.mixer.write_main_volume_right(value as i16),
             _ => {
-                eprintln!(
+                elog!(
                     "Invalid/unhandled SPU write to register offset: 0x{:X}",
                     offset
                 );
@@ -276,7 +277,7 @@ impl Spu {
             0xC => self.voices[voice_idx].read_current_level() as u16,
             0xE => self.voices[voice_idx].read_repeat_address(),
             _ => {
-                // eprintln!("Invalid voice register offset:  for read0x{:X}", offset);
+                // elog!("Invalid voice register offset:  for read0x{:X}", offset);
                 0
             }
         }
@@ -291,7 +292,7 @@ impl Spu {
             0x8 => self.voices[voice_idx].write_adsr_config_low(value),
             0xA => self.voices[voice_idx].write_adsr_config_high(value),
             0xE => self.voices[voice_idx].write_repeat_address(value),
-            _ => {} // eprintln!("Invalid voice register offset:  for write0x{:X}", offset),
+            _ => {} // elog!("Invalid voice register offset:  for write0x{:X}", offset),
         }
     }
 

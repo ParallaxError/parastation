@@ -14,6 +14,7 @@ mod sio_device;
 use sio_device::SioDevice;
 
 // Imports
+use crate::elog;
 use crate::interrupt_controller::{Interrupt, InterruptController};
 use crate::scheduler::{Scheduler, SchedulerEvent};
 
@@ -74,7 +75,7 @@ impl SioController {
             0xA => self.read_ctrl() as u32,
             0xE => self.read_baud() as u32,
             _ => {
-                eprintln!("SIO0: Invalid read register offset: 0x{:X}", offset);
+                elog!("SIO0: Invalid read register offset: 0x{:X}", offset);
                 0
             }
         }
@@ -84,13 +85,13 @@ impl SioController {
         match offset {
             0x0 => self.write_data(value as u8, scheduler),
             0x4 => {
-                eprintln!("SIO0: Invalid write to STAT register");
+                elog!("SIO0: Invalid write to STAT register");
             }
             0x8 => self.write_mode(value as u16),
             0xA => self.write_ctrl(value as u16),
             0xE => self.write_baud(value as u16),
             _ => {
-                eprintln!("SIO0: Invalid write register offset: 0x{:X}", offset);
+                elog!("SIO0: Invalid write register offset: 0x{:X}", offset);
             }
         }
     }

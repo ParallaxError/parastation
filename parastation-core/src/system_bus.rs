@@ -12,8 +12,9 @@
  */
 
 // Imports
+use crate::elog;
 use crate::bios::Bios;
-use crate::cd_rom::CdRom;
+use crate::cd_rom::{CdRom, DiscSource};
 use crate::dma::{DmaController, DmaTransfer};
 use crate::gpu::{Gpu, GpuBackend};
 use crate::interrupt_controller::{Interrupt, InterruptController};
@@ -213,7 +214,7 @@ impl SystemBus {
             return self.mdec.read_register(offset);
         }
 
-        eprintln!("Unhandled read at address {addr:#x}");
+        elog!("Unhandled read at address {addr:#x}");
         0
     }
 
@@ -252,7 +253,7 @@ impl SystemBus {
         if addr == 0xFFFE_0130 {
             return;
         } // Absorb writes to the cache control, doesn't matter. HACK
-        eprintln!("Unhandled write at address {addr:#x} with value {value:#x}");
+        elog!("Unhandled write at address {addr:#x} with value {value:#x}");
     }
 
     fn read_memory_control_1(&self, offset: u32) -> u32 {
@@ -280,7 +281,7 @@ impl SystemBus {
             0x1C => 0x0007_0777, // Expansion 2 Delay/Size
             0x20 => 0x0003_1125, // COM_DELAY / COMMON_DELAY
             _ => {
-                eprintln!("Unhandled read from memory control 1 at offset {offset:#x}");
+                elog!("Unhandled read from memory control 1 at offset {offset:#x}");
                 0
             }
         }
@@ -291,7 +292,7 @@ impl SystemBus {
             0 => self.interrupt_controller.read_stat(),
             4 => self.interrupt_controller.read_mask(),
             _ => {
-                eprintln!("Unhandled read from interrupt controller at offset {offset:#x}");
+                elog!("Unhandled read from interrupt controller at offset {offset:#x}");
                 0
             }
         }
@@ -301,7 +302,7 @@ impl SystemBus {
         match offset {
             0 => self.interrupt_controller.write_stat(value),
             4 => self.interrupt_controller.write_mask(value),
-            _ => eprintln!(
+            _ => elog!(
                 "Unhandled write to interrupt controller at offset {offset:#x} with value {value:#x}"
             ),
         }
@@ -586,8 +587,12 @@ impl SystemBus {
         }
     }
 
-    /// Insert a disc into the CD-ROM drive from the provided .cue file path.
-    pub fn insert_cdrom_disc(&mut self, path: &str) {
-        self.cd_rom.insert_disc(path);
+    /// Insert a disc into the CD-ROM drive from the provided .cue file and file acquisition method.
+    pub fn insert_cdrom_disc(
+        &mut self,
+        cue_content: &str,
+        open_file: impl FnMut(&str) -> Box<dyn DiscSource>,
+    ) {
+        self.cd_rom.insert_disc(cue_content, open_file);
     }
 }

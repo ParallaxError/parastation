@@ -11,6 +11,7 @@
  */
 
 // Imports
+use crate::elog;
 use crate::interrupt_controller::{Interrupt, InterruptController};
 
 /// Possible DMA transfer types that the system bus should execute, decoded by the DMA controller
@@ -397,7 +398,7 @@ impl DmaController {
             0x74 => self.read_dicr(),
             0x76 => self.read_dicr() >> 16, // DICR upper byte (channel IRQ enables), MMX4 reads this
             _ => {
-                eprintln!("Invalid DMA register read at offset {offset:#x}");
+                elog!("Invalid DMA register read at offset {offset:#x}");
                 0
             }
         }
@@ -431,7 +432,7 @@ impl DmaController {
             0x74 => self.write_dicr(value, interrupt_controller),
             0x76 => self.write_dicr(value << 16, interrupt_controller),
             _ => {
-                eprintln!("Invalid DMA register write at offset {offset:#x} with value {value:#x}")
+                elog!("Invalid DMA register write at offset {offset:#x} with value {value:#x}")
             }
         }
     }
@@ -496,14 +497,14 @@ impl DmaController {
                     }
                 }
                 SyncMode::ImmediateStartTransfer => {
-                    eprintln!("DMA2 with SyncMode 0 (immediate), treating as VRAM write...");
+                    elog!("DMA2 with SyncMode 0 (immediate), treating as VRAM write...");
                     Some(DmaTransfer::GpuVramWrite {
                         src_addr: addr,
                         word_count: ch.bcr.total_words(),
                     })
                 }
                 _ => {
-                    eprintln!("DMA2 unsupported sync mode");
+                    elog!("DMA2 unsupported sync mode");
                     None
                 }
             },
@@ -530,7 +531,7 @@ impl DmaController {
                     }
                 }
                 _ => {
-                    eprintln!("DMA4 unsupported sync mode");
+                    elog!("DMA4 unsupported sync mode");
                     None
                 }
             },
@@ -548,7 +549,7 @@ impl DmaController {
             }),
 
             _ => {
-                eprintln!("Unsupported DMA channel {channel}");
+                elog!("Unsupported DMA channel {channel}");
                 None
             }
         }

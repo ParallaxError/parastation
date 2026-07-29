@@ -10,6 +10,9 @@
  * -----
  */
 
+// Imports
+use crate::elog;
+
 /// Represents one of the coprocessor 0 registers.
 #[derive(Debug)]
 pub struct Cop0Register(pub u8);
@@ -53,7 +56,7 @@ impl Cop0 {
             Cop0Register(14) => self.epc,
             Cop0Register(15) => 0x0000_0002, // Processor ID register, R3000A
             _ => {
-                eprintln!("Invalid CP0 register index: {:?}", reg);
+                elog!("Invalid CP0 register index: {:?}", reg);
                 0
             }
         }
@@ -68,7 +71,7 @@ impl Cop0 {
             Cop0Register(12) => self.sr = value,
             Cop0Register(13) => self.cause = value,
             Cop0Register(14) => self.epc = value,
-            _ => eprintln!("Invalid CP0 register index: {:?}", reg),
+            _ => elog!("Invalid CP0 register index: {:?}", reg),
         }
     }
 }

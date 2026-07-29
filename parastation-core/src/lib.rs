@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 // Modules
+pub mod logging;
 mod backend;
 pub mod bios;
 mod cd_rom;
@@ -31,6 +32,7 @@ mod xadpcm;
 
 pub use backend::Backend;
 pub use bios::Bios;
+pub use cd_rom::DiscSource;
 use cpu::{Cpu, MipsRegister};
 pub use gpu::GpuBackend;
 pub use interpreter::Interpreter;
@@ -135,8 +137,12 @@ impl<B: Backend> Ps1<B> {
         self.bus.gpu.display();
     }
 
-    /// Insert a disc into the CD-ROM drive from the provided .cue file path.
-    pub fn insert_cdrom_disc(&mut self, path: &str) {
-        self.bus.insert_cdrom_disc(path);
+    /// Insert a disc into the CD-ROM drive from the provided .cue file and file acquisition method.
+    pub fn insert_cdrom_disc(
+        &mut self,
+        cue_content: &str,
+        open_file: impl FnMut(&str) -> Box<dyn DiscSource>,
+    ) {
+        self.bus.insert_cdrom_disc(cue_content, open_file);
     }
 }

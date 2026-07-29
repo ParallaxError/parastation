@@ -12,6 +12,7 @@
  */
 
 // Imports
+use crate::elog;
 use crate::spu::PcmSample;
 
 // 39-tap FIR filter coefficiens from psx-spx, used for the reverb unit
@@ -231,7 +232,7 @@ impl Reverb {
             0x1FC => self.vlin as u16,
             0x1FE => self.vrin as u16,
             _ => {
-                eprintln!("Reverb: Invalid register read at offset {offset:#X}");
+                elog!("Reverb: Invalid register read at offset {offset:#X}");
                 0
             }
         }
@@ -275,7 +276,7 @@ impl Reverb {
             0x1FC => self.vlin = value as i16,
             0x1FE => self.vrin = value as i16,
             _ => {
-                eprintln!("Reverb: Invalid register write at offset {offset:#X}");
+                elog!("Reverb: Invalid register write at offset {offset:#X}");
             }
         }
     }
