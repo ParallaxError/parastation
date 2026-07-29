@@ -144,12 +144,7 @@ macro_rules! bus_read {
         }
 
         let word = $self.read_hardware(addr);
-        let shift = match $width {
-            AccessWidth::Byte => (addr & 3) * 8,
-            AccessWidth::Half => (addr & 1) * 8,
-            AccessWidth::Word => 0,
-        };
-        return (word >> shift) as _;
+        return word as _;
     }};
 }
 
@@ -221,25 +216,6 @@ impl SystemBus {
     }
 
     fn write_hardware(&mut self, addr: u32, value: u32, width: AccessWidth) {
-        let value = match width {
-            AccessWidth::Word => value,
-            AccessWidth::Half => {
-                let shift = (addr & 1) * 8;
-                let old = self.read_hardware(addr & !1);
-                (old & !(0xFFFF << shift)) | (value << shift)
-            }
-            AccessWidth::Byte => {
-                let shift = (addr & 3) * 8;
-                let old = self.read_hardware(addr & !3);
-                (old & !(0xFF << shift)) | (value << shift)
-            }
-        };
-        let addr = match width {
-            AccessWidth::Word => addr,
-            AccessWidth::Half => addr & !1,
-            AccessWidth::Byte => addr & !3,
-        };
-
         if let Some(_offset) = MEMORY_CONTROL_1.contains(addr) {
             return;
         } // Absorb writes to memory control 1, just gonna hardware. HACK
@@ -454,8 +430,9 @@ impl SystemBus {
         }
     }
 
-    fn dma_mdec_in(&mut self, base_addr: u32, word_count: u32) {
+    fn dma_mdec_in(&mut self, base_addr: u32, word_count: u32) -> u32 {
         let mut addr = base_addr & 0x001F_FFFC;
+        let mut transferred = 0;
         let mut remaining = word_count;
 
         while remaining > 0 && self.mdec.wants_more_input() {
@@ -464,13 +441,16 @@ impl SystemBus {
                 let word = self.ram.read32(addr);
                 self.mdec.write_command_param(word);
                 addr = addr.wrapping_add(4);
+                transferred += 1;
             }
             remaining -= block_words;
         }
+        transferred
     }
 
-    fn dma_mdec_out(&mut self, base_addr: u32, word_count: u32) {
+    fn dma_mdec_out(&mut self, base_addr: u32, word_count: u32) -> u32 {
         let mut addr = base_addr & 0x001F_FFFC;
+        let mut transferred = 0;
         let mut remaining = word_count;
 
         while remaining > 0 && self.mdec.has_output_ready() {
@@ -479,55 +459,63 @@ impl SystemBus {
             self.ram.write32(write_addr, word);
             addr = addr.wrapping_add(4);
             remaining -= 1;
+            transferred += 1;
         }
+        transferred
     }
 }
 
 // DMA dispatch
 impl SystemBus {
-    fn execute_dma_transfer(&mut self, transfer: DmaTransfer) {
+    fn execute_dma_transfer(&mut self, transfer: DmaTransfer) -> bool {
         match transfer {
-            DmaTransfer::OtcFill {
-                base_addr,
-                word_count,
-            } => self.dma_otc(base_addr, word_count),
-            DmaTransfer::CdromToRam {
-                dest_addr,
-                word_count,
-            } => self.dma_cdrom_to_ram(dest_addr, word_count),
-            DmaTransfer::GpuLinkedList { list_addr } => self.dma_gpu_linked_list(list_addr),
-            DmaTransfer::GpuVramWrite {
-                src_addr,
-                word_count,
-            } => self.dma_gpu_vram_write(src_addr, word_count),
-            DmaTransfer::GpuVramRead {
-                dest_addr,
-                word_count,
-            } => self.dma_gpu_vram_read(dest_addr, word_count),
-            DmaTransfer::SpuWrite {
-                src_addr,
-                word_count,
-            } => self.dma_spu_write(src_addr, word_count),
-            DmaTransfer::SpuRead {
-                dest_addr,
-                word_count,
-            } => self.dma_spu_read(dest_addr, word_count),
-            DmaTransfer::MdecIn {
-                src_addr,
-                word_count,
-            } => self.dma_mdec_in(src_addr, word_count),
-            DmaTransfer::MdecOut {
-                dest_addr,
-                word_count,
-            } => self.dma_mdec_out(dest_addr, word_count),
+            DmaTransfer::OtcFill { base_addr, word_count } => {
+                self.dma_otc(base_addr, word_count);
+                true
+            }
+            DmaTransfer::CdromToRam { dest_addr, word_count } => {
+                self.dma_cdrom_to_ram(dest_addr, word_count);
+                true
+            }
+            DmaTransfer::GpuLinkedList { list_addr } => {
+                self.dma_gpu_linked_list(list_addr);
+                true
+            }
+            DmaTransfer::GpuVramWrite { src_addr, word_count } => {
+                self.dma_gpu_vram_write(src_addr, word_count);
+                true
+            }
+            DmaTransfer::GpuVramRead { dest_addr, word_count } => {
+                self.dma_gpu_vram_read(dest_addr, word_count);
+                true
+            }
+            DmaTransfer::SpuWrite { src_addr, word_count } => {
+                self.dma_spu_write(src_addr, word_count);
+                true
+            }
+            DmaTransfer::SpuRead { dest_addr, word_count } => {
+                self.dma_spu_read(dest_addr, word_count);
+                true
+            }
+            DmaTransfer::MdecIn { src_addr, word_count } => {
+                self.dma_mdec_in(src_addr, word_count) == word_count
+            }
+            DmaTransfer::MdecOut { dest_addr, word_count } => {
+                self.dma_mdec_out(dest_addr, word_count) == word_count
+            }
         }
     }
 
     fn tick_dma(&mut self) {
         while let Some((channel, transfer)) = self.dma.get_pending_transfer() {
-            self.execute_dma_transfer(transfer);
-            self.dma
-                .complete_transfer(channel, &mut self.interrupt_controller);
+            let completed = self.execute_dma_transfer(transfer);
+            if completed {
+                self.dma
+                    .complete_transfer(channel, &mut self.interrupt_controller);
+            } else {
+                // MDEC wasn't ready for more input/output, block other channels until it's done
+                break;
+            }
         }
     }
 }

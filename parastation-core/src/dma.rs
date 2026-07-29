@@ -291,21 +291,25 @@ impl DmaController {
     }
 
     fn write_dicr(&mut self, value: u32, interrupt_controller: &mut InterruptController) {
-        // If enabling an interrupt falls on a rising edge, we need to raise the interrupt immediately so it isn't
-        // dropped silently. So lets check if this was indeed the case, and raise the interrupt if so
+        // If an interrupt enable falls on the rising edge of the corresponding flag, we need to raise an interrupt to
+        // avoid silently dropping it
+        // This stopped crash and MGS for booting for a while...
         let prev_irq_pending = self.irq_pending();
 
-        // Bits 0-23 writeable directly, new flags are the old flags AND NOT the ack_mask (bits 24-30)
-        let writable_low = value & 0x00FF_FFFF;
+        // Bits 0-5, 15, 16-23 are writeable
+        // 6-14 are unused
+        let write_mask: u32 = 0x00FF_803F;
+        let writable_low = value & write_mask;
+
+        // Bits 24-30 are per channel IRQ flags, where writing ACKs them, so we clear them with the ack_mask
         let ack_mask = (value >> 24) & 0x7F;
         let new_flags = ((self.dicr >> 24) & 0x7F) & !ack_mask;
-        self.dicr = writable_low | (new_flags << 24);
 
-        // Recalculate the master IRQ bit based on the new flags and enables, and raise the interrupt if necessary
+        self.dicr = (self.dicr & !write_mask & 0x00FF_FFFF) | writable_low | (new_flags << 24);
+
+        // Recalculate the master IRQ flag based on the new state of the DICR and raise an interrupt if rising edge
         self.recalculate_master_irq();
 
-        // Now if we're on a rising edge of the master IRQ bit, we need to raise the interrupt
-        // This stopped Crash and MGS from booting for a whole day... so yeah, this is important
         let now_pending = self.irq_pending();
         if !prev_irq_pending && now_pending {
             interrupt_controller.raise_interrupt(Interrupt::DMA);
@@ -313,17 +317,15 @@ impl DmaController {
     }
 
     fn recalculate_master_irq(&mut self) {
-        let force_irq = (self.dicr >> 15) & 0x1 != 0;
+        let force_irq: bool = (self.dicr >> 15) & 0x1 != 0;
         let master_enable = (self.dicr >> 23) & 0x1 != 0;
-
-        // A channel's flag bit only counts towards "pending" if that channels individual IRQ enable is also set
-        // So we need to mask the channel flags with the channel enables to determine if any channels are pending
-        let channel_irq_en = (self.dicr >> 16) & 0x7F;
         let channel_irq_flags = (self.dicr >> 24) & 0x7F;
-        let masked_flags = channel_irq_flags & channel_irq_en;
 
-        // Per psx-spx: dicr31 = dicr15 OR (dicr23 AND (dicr24-30 masked by dicr16-22 > 0))
-        if force_irq || (master_enable && masked_flags != 0) {
+        // dicr31 = dicr15 OR (dicr23 AND dicr(24-30) != 0)
+        // Earlier I had bits 16-22 (per channel enable) gating a flag bit, but that is NOT the case
+        // 16-22 only gate whether the bits get set when a channel completes, but once set they can trigger an 
+        // interrupt regardless of the enable bits
+        if force_irq || (master_enable && channel_irq_flags != 0) {
             self.dicr |= 1 << 31;
         } else {
             self.dicr &= !(1 << 31);
@@ -393,6 +395,7 @@ impl DmaController {
             // 0x70/0x74: DPCR/DICR
             0x70 => self.read_dpcr(),
             0x74 => self.read_dicr(),
+            0x76 => self.read_dicr() >> 16, // DICR upper byte (channel IRQ enables), MMX4 reads this
             _ => {
                 eprintln!("Invalid DMA register read at offset {offset:#x}");
                 0
@@ -426,6 +429,7 @@ impl DmaController {
             }
             0x70 => self.write_dpcr(value),
             0x74 => self.write_dicr(value, interrupt_controller),
+            0x76 => self.write_dicr(value << 16, interrupt_controller),
             _ => {
                 eprintln!("Invalid DMA register write at offset {offset:#x} with value {value:#x}")
             }
@@ -443,22 +447,14 @@ impl DmaController {
         ch.chcr.busy = false;
         ch.chcr.start_trigger = false;
 
+        // IRQ flags set upon channel completion only if the corresponding channel is enabled in DICR (bits 16-22)
         let irq_enabled = (self.dicr >> (16 + channel)) & 0x1 != 0;
         if irq_enabled {
             self.dicr |= 1 << (24 + channel);
         }
 
-        let force_irq = (self.dicr >> 15) & 0x1 != 0;
-        let master_enable = (self.dicr >> 23) & 0x1 != 0;
-        let channel_irq_en = (self.dicr >> 16) & 0x7F;
-        let channel_irq_flags = (self.dicr >> 24) & 0x7F;
-        let any_flags = (channel_irq_flags & channel_irq_en) != 0;
+        self.recalculate_master_irq();
 
-        if force_irq || (master_enable && any_flags) {
-            self.dicr |= 1 << 31;
-        } else {
-            self.dicr &= !(1 << 31);
-        }
 
         let now_pending = self.irq_pending();
         if !prev_irq_pending && now_pending {

@@ -103,12 +103,12 @@ fn msf_to_lba(minutes: u8, seconds: u8, frames: u8) -> u32 {
     (minutes as u32 * 60 + seconds as u32) * 75 + frames as u32
 }
 
-fn lba_to_msf_bcd(lba: u32) -> (u8, u8) {
-    let lba = lba + 150; // PS1 MSF is offset by 2 seconds
-    let total_seconds = lba / 75;
-    let minutes = (total_seconds / 60) as u8;
-    let seconds = (total_seconds % 60) as u8;
-    (decimal_to_bcd(minutes), decimal_to_bcd(seconds))
+fn lba_to_msf_bcd(lba: u32) -> (u8, u8, u8) {
+    let lba = lba + 150; // PS1 MSF is offset by 2 seconds (lead-in)
+    let minutes = (lba / 75 / 60) as u8;
+    let seconds = ((lba / 75) % 60) as u8;
+    let sectors = (lba % 75) as u8;
+    (decimal_to_bcd(minutes), decimal_to_bcd(seconds), decimal_to_bcd(sectors))
 }
 
 fn bcd_to_decimal(bcd: u8) -> u8 {
@@ -264,10 +264,10 @@ impl CdRom {
             return;
         }
 
-        self.perform_sector_read(scheduler);
+        let should_interrupt = self.perform_sector_read(scheduler);
 
-        // Only interrupt for ReadN/ReadS, not for Play
-        if self.reading {
+        // Only interrupt for data sectors
+        if should_interrupt {
             self.push_response(&[self.get_status_byte()]);
             self.set_interrupt(1, interrupt_controller);
         }
@@ -611,7 +611,7 @@ impl CdRom {
         let (peaklo, peakhi) = (0u8, 0u8); // TODO peak level
 
         let bytes = if report_absolute {
-            let (amm, ass) = lba_to_msf_bcd(lba);
+            let (amm, ass, _) = lba_to_msf_bcd(lba);
             let asect_bcd = decimal_to_bcd(asect);
             vec![
                 self.get_status_byte(),
@@ -625,7 +625,7 @@ impl CdRom {
             ]
         } else {
             let rel_lba = lba - track.start_logical_block;
-            let (mm, ss) = lba_to_msf_bcd(rel_lba - 150); // -150 since track relative
+            let (mm, ss, _) = lba_to_msf_bcd(rel_lba - 150); // -150 since track relative
             let sect = decimal_to_bcd((rel_lba % 75) as u8);
             vec![
                 self.get_status_byte(),
@@ -642,7 +642,8 @@ impl CdRom {
         self.schedule_event(cdrom_timing::DEFAULT_FIRST, bytes, 1, scheduler);
     }
 
-    fn perform_sector_read(&mut self, scheduler: &mut Scheduler) {
+    /// Performs a sector read and returns True if an interrupt should be raised for the sector
+    fn perform_sector_read(&mut self, scheduler: &mut Scheduler) -> bool {
         self.sector_buffer = self.read_sector(self.current_logical_block);
         let track_type = self.track_type_for_lba(self.current_logical_block);
         self.current_logical_block += 1;
@@ -650,7 +651,7 @@ impl CdRom {
         if track_type == TrackType::Audio {
             self.extract_cdda_audio();
             self.maybe_deliver_play_report(self.current_logical_block - 1, scheduler);
-            return;
+            return false;
         }
 
         /*
@@ -682,11 +683,13 @@ impl CdRom {
         if deliver_as_adpcm {
             self.xadpcm_decoder
                 .decode_sector(&subheader, &self.sector_buffer);
+            return false;
         } else {
             let reject_data = self.xa_filter_enabled && is_realtime_audio;
             if !reject_data {
                 self.extract_data_buffer();
             }
+            return true;
         }
     }
 
@@ -752,7 +755,6 @@ impl CdRom {
 impl CdRom {
     // Dispatch
     fn execute_command(&mut self, cmd: u8, scheduler: &mut Scheduler) {
-        println!("Executing CD-ROM command {cmd}");
         // Clear response fifo and any pending interrupts before executing the command
         self.command_result.clear();
         scheduler.cancel(|event| matches!(event, SchedulerEvent::CdRomResponse { .. }));
@@ -768,6 +770,7 @@ impl CdRom {
             0x0C => self.cmd_demute(scheduler),
             0x0D => self.cmd_setfilter(scheduler),
             0x0E => self.cmd_setmode(scheduler),
+            0x11 => self.cmd_getlocp(scheduler),
             0x13 => self.cmd_gettn(scheduler),
             0x14 => self.cmd_gettd(scheduler),
             0x15 => self.cmd_seekl(scheduler),
@@ -1073,6 +1076,80 @@ impl CdRom {
         );
     }
 
+    // 0x11
+    fn cmd_getlocp(&mut self, scheduler: &mut Scheduler) {
+        /*
+        GetlocP - Command 11h - INT3(track,index,mm,ss,sect,amm,ass,asect)
+
+        Retrieves 8 bytes of position information from Subchannel Q with ADR=1. Mainly intended for displaying the
+        current audio position during Play. All results are in BCD.
+
+        track:  track number (AAh=Lead-out area) (FFh=unknown, toc, none?)
+        index:  index number (Usually 01h)
+        mm:     minute number within track (00h and up)
+        ss:     second number within track (00h to 59h)
+        sect:   sector number within track (00h to 74h)
+        amm:    minute number on entire disk (00h and up)
+        ass:    second number on entire disk (00h to 59h)
+        asect:  sector number on entire disk (00h to 74h)
+        */
+
+        let lba = self.current_logical_block;
+
+        let Some(disc) = &self.disc else {
+            // No disc, report unknown track/index and zero position
+            self.schedule_event(
+                cdrom_timing::DEFAULT_FIRST,
+                vec![0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+                3,
+                scheduler,
+            );
+            return;
+        };
+
+        let track = disc
+            .tracks
+            .iter()
+            .rev()
+            .find(|t| t.start_logical_block <= lba);
+
+        let Some(track) = track else {
+            // Before the first track / unknown position
+            self.schedule_event(
+                cdrom_timing::DEFAULT_FIRST,
+                vec![0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+                3,
+                scheduler,
+            );
+            return;
+        };
+
+        let track_number = track.track_number;
+        let index = 1u8;
+
+        let rel_lba = lba - track.start_logical_block;
+        let (mm, ss, sect) = lba_to_msf_bcd(rel_lba);
+
+        let disc_lba_with_leadin_removed = lba;
+        let (amm, ass, asect) = lba_to_msf_bcd(disc_lba_with_leadin_removed);
+
+        self.schedule_event(
+            cdrom_timing::DEFAULT_FIRST,
+            vec![
+                decimal_to_bcd(track_number),
+                decimal_to_bcd(index),
+                mm,
+                ss,
+                sect,
+                amm,
+                ass,
+                asect,
+            ],
+            3,
+            scheduler,
+        );
+    } 
+
     // 0x13
     fn cmd_gettn(&mut self, scheduler: &mut Scheduler) {
         /*
@@ -1180,7 +1257,7 @@ impl CdRom {
             track.start_logical_block
         };
 
-        let (mm, ss) = lba_to_msf_bcd(lba);
+        let (mm, ss, _) = lba_to_msf_bcd(lba);
 
         self.schedule_event(
             cdrom_timing::DEFAULT_FIRST,

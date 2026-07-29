@@ -27,12 +27,12 @@ fn main() {
 
     let event_loop = EventLoop::new().unwrap();
     let mut runner = Runner::new(&event_loop, bios);
-    // runner.set_uncapped(true);
+    runner.set_uncapped(true);
 
-    runner.insert_cdrom_disc(r"games/MGS/Metal Gear Solid (Disc 1).cue");
+    runner.insert_cdrom_disc(r"games/TonyHawk/Tony Hawk's Skateboarding.cue");
     // runner.run_until_pc_and_load_exe(
     //     0x80030000,
-    //     r"tests/mdec/movie/movie-24bit.exe",
+    //     r"tests/mdec/frame/frame-24bit-dma.exe",
     // );
     runner.run(event_loop);
 }
