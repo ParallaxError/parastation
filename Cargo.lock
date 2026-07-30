@@ -291,6 +291,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -629,6 +639,18 @@ name = "glow"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd348e04c43b32574f2de31c8bb397d96c9fcfa1371bd4ca6d8bdc464ab121b1"
+dependencies = [
+ "js-sys",
+ "slotmap",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "glow"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d51fa363f025f5c111e03f13eda21162faeacb6911fe8caa0c0349f9cf0c4483"
 dependencies = [
  "js-sys",
  "slotmap",
@@ -1172,7 +1194,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "cpal",
- "glow",
+ "glow 0.13.1",
  "glutin",
  "glutin-winit",
  "image",
@@ -1182,6 +1204,18 @@ dependencies = [
  "ringbuf",
  "winapi",
  "winit",
+]
+
+[[package]]
+name = "parastation-web"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "glow 0.14.2",
+ "js-sys",
+ "parastation-core",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

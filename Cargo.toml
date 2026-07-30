@@ -2,6 +2,7 @@
 members = [
     "parastation-core",
     "parastation-frontend",
+    "parastation-web",
 ]
 resolver = "2"
 

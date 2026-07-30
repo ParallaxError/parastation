@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Parastation Web</title>
+</head>
+<body>
+    <h1>Parastation</h1>
+    <input type="file" id="bios-upload" accept=".bin">
+    <canvas id="ps1-canvas" width="1024" height="512"></canvas>
+    <pre id="tty-output" style="background:#111; color:#0f0; padding:1em; height:200px; overflow-y:scroll;"></pre>
+
+    <script type="module">
+        import init, { WebRunner } from './pkg/parastation_web.js';
+
+        async function main() {
+            // Initialize the WASM module
+            await init();
+            const canvas = document.getElementById('ps1-canvas');
+            const runner = new WebRunner(canvas);
+
+            // Set up audio context, and a loop to pump audio from the runner to the audio context
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+            let nextPlayTime = audioCtx.currentTime;
+
+            function pumpAudio() {
+                // Drain audio samples from the runner and play them
+                const samples = runner.drain_audio(4096); // f32 samples interleaved for stereo
+                if (samples.length > 0) {
+                    const frameCount = samples.length / 2;
+                    const buffer = audioCtx.createBuffer(2, frameCount, 44100);
+                    const left = buffer.getChannelData(0);
+                    const right = buffer.getChannelData(1);
+
+                    // Deinterleave samples into left and right channels
+                    for (let i = 0; i < frameCount; i++) {
+                        left[i] = samples[i * 2];
+                        right[i] = samples[i * 2 + 1];
+                    }
+
+                    // Create a buffer source and play it
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(audioCtx.destination);
+
+                    if (nextPlayTime < audioCtx.currentTime) {
+                        nextPlayTime = audioCtx.currentTime;
+                    }
+                    source.start(nextPlayTime);
+
+                    // SPU ticks every 44100 CPU cycles, so calculate next play time
+                    nextPlayTime += frameCount / 44100;
+                }
+                setTimeout(pumpAudio, 50);
+            }
+
+            document.getElementById('bios-upload').addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                runner.load_bios(bytes);
+
+                function frame() {
+                    runner.tick_frame(564480); // 1/60 * PS1 frequency
+                    requestAnimationFrame(frame);
+                }
+                requestAnimationFrame(frame);
+                pumpAudio();
+            });
+        }
+
+        main();
+    </script>
+</body>
+</html>
