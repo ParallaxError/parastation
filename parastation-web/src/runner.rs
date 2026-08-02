@@ -16,6 +16,7 @@ use parastation_core::{Interpreter, Ps1};
 
 use crate::dummy_backends::*;
 use crate::web_spu_backend::{SharedSpuHandle, WebSpuBackend};
+use crate::webgl_backend::shared_gpu_handle::SharedGpuHandle;
 use crate::webgl_backend::{WebGlBackend, create_gl_context};
 
 /// Owns the PS1 core and the backend handles needed for the JavaScript to interact with the emulator. Doesn't own the
@@ -24,6 +25,7 @@ use crate::webgl_backend::{WebGlBackend, create_gl_context};
 pub struct WebRunner {
     ps1: Option<Ps1<Interpreter>>,
     spu_handle: Option<Rc<RefCell<WebSpuBackend>>>,
+    gpu_handle: Option<Rc<RefCell<WebGlBackend>>>,
     canvas: web_sys::HtmlCanvasElement,
 
     total_cycles_run: u64,
@@ -35,6 +37,7 @@ impl WebRunner {
         Self {
             ps1: None,
             spu_handle: None,
+            gpu_handle: None,
             canvas: canvas.clone(),
             total_cycles_run: 0,
             total_frames_run: 0,
@@ -47,7 +50,9 @@ impl WebRunner {
         let width = self.canvas.width();
         let height = self.canvas.height();
         let gl = create_gl_context(&self.canvas);
-        let gpu_backend = Box::new(WebGlBackend::new(gl, width, height));
+
+        let gpu_shared = Rc::new(RefCell::new(WebGlBackend::new(gl, width, height)));
+        let gpu_for_ps1 = Box::new(SharedGpuHandle::new(Rc::clone(&gpu_shared)));
 
         let spu_shared = Rc::new(RefCell::new(WebSpuBackend::new()));
         let spu_for_ps1 = Box::new(SharedSpuHandle::new(Rc::clone(&spu_shared)));
@@ -55,7 +60,7 @@ impl WebRunner {
         let ps1 = Ps1::new(
             bios,
             Interpreter::new(),
-            gpu_backend,
+            gpu_for_ps1,
             spu_for_ps1,
             Box::new(DummyInputProvider),
             Box::new(DummyInputProvider),
@@ -63,6 +68,7 @@ impl WebRunner {
 
         self.ps1 = Some(ps1);
         self.spu_handle = Some(spu_shared);
+        self.gpu_handle = Some(gpu_shared);
     }
 
     /// Runs the emulator for the given number of CPU cycles. Called once per requestAnimationFrame tick from JS for as
@@ -85,5 +91,16 @@ impl WebRunner {
             return Vec::new();
         };
         spu_handle.borrow_mut().drain_interleaved_f32(max_frames)
+    }
+
+    // GPU debug methods
+    pub fn dump_accurate_vram(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let gpu_handle = self.gpu_handle.as_ref()?;
+        Some(gpu_handle.borrow().dump_accurate_target())
+    }
+
+    pub fn dump_enhanced_vram(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let gpu_handle = self.gpu_handle.as_ref()?;
+        Some(gpu_handle.borrow().dump_enhanced_target())
     }
 }

@@ -6,6 +6,8 @@
 </head>
 <body>
     <h1>Parastation</h1>
+    <button id="dump-accurate-btn">Dump Accurate VRAM</button>
+    <button id="dump-enhanced-btn">Dump Enhanced VRAM</button>
     <input type="file" id="bios-upload" accept=".bin">
     <canvas id="ps1-canvas" width="1024" height="512"></canvas>
     <pre id="tty-output" style="background:#111; color:#0f0; padding:1em; height:200px; overflow-y:scroll;"></pre>
@@ -18,6 +20,41 @@
             await init();
             const canvas = document.getElementById('ps1-canvas');
             const runner = new WebRunner(canvas);
+
+            function downloadRgbaAsPng(rgbaBytes, width, height, filename) {
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+
+                const imageData = new ImageData(new Uint8ClampedArray(rgbaBytes), width, height);
+                ctx.putImageData(imageData, 0, 0);
+
+                canvas.toBlob((blob) => {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                }, 'image/png');
+            }
+
+            document.getElementById('dump-accurate-btn').addEventListener('click', () => {
+                const bytes = runner.dump_accurate_vram();
+                const dims = runner.accurate_vram_dims();
+                if (bytes && dims.length === 2) {
+                    downloadRgbaAsPng(bytes, dims[0], dims[1], 'accurate_vram.png');
+                }
+            });
+
+            document.getElementById('dump-enhanced-btn').addEventListener('click', () => {
+                const bytes = runner.dump_enhanced_vram();
+                const dims = runner.enhanced_vram_dims();
+                if (bytes && dims.length === 2) {
+                    downloadRgbaAsPng(bytes, dims[0], dims[1], 'enhanced_vram.png');
+                }
+            });
 
             // Set up audio context, and a loop to pump audio from the runner to the audio context
             const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });

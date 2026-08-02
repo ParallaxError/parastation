@@ -1210,6 +1210,7 @@ dependencies = [
 name = "parastation-web"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "console_error_panic_hook",
  "glow 0.14.2",
  "js-sys",

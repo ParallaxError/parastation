@@ -15,9 +15,17 @@ void main() {
         vec2(0.0, 1.0),
         vec2(1.0, 1.0)
     );
-    vec2 pos = positions[gl_VertexID];
+    vec2 uvs[4] = vec2[](
+        vec2(0.0, 1.0),
+        vec2(1.0, 1.0),
+        vec2(0.0, 0.0),
+        vec2(1.0, 0.0)
+    );
 
-    frag_uv = display_origin + pos * display_size;
+    vec2 pos = positions[gl_VertexID];
+    vec2 uv = uvs[gl_VertexID];
+
+    frag_uv = display_origin + uv * display_size;
 
     vec2 ndc = screen_offset + pos * screen_size;
     gl_Position = vec4(ndc, 0.0, 1.0);

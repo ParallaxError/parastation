@@ -82,7 +82,7 @@ impl TextureWindow {
 }
 
 /// Drawing area corners set by GP0(E3h) and GP0(E4h)
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DrawingArea {
     pub x1: u16,
     pub y1: u16,

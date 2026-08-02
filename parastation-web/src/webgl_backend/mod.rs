@@ -8,15 +8,20 @@
  * -----
  */
 
+mod batch;
 mod drawing;
 mod render_target;
+pub mod shared_gpu_handle;
 
 // Imports
+use glow::HasContext;
 use parastation_core::gpu::backend::GpuBackend;
 use parastation_core::gpu::*;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext};
 
+use batch::FlatBatch;
+use drawing::*;
 use render_target::{RenderTarget, VRAM_HEIGHT, VRAM_WIDTH};
 
 /// Acquire a WebGL2 context from a canvas element and wrap it into a glow::Context
@@ -48,12 +53,13 @@ pub struct WebGlBackend {
     accurate_target: RenderTarget,
     enhanced_target: RenderTarget,
 
-    present_program: glow::Program,
-    present_vao: glow::VertexArray,
-    present_uniforms: PresentUniforms,
-
     canvas_width: u32,
     canvas_height: u32,
+
+    present_pipeline: PresentPipeline,
+
+    flat_batch: FlatBatch,
+    flat_pipeline: FlatPipeline,
 }
 
 impl WebGlBackend {
@@ -68,25 +74,27 @@ impl WebGlBackend {
         );
         let enhanced_target = RenderTarget::new(
             &gl,
-            VRAM_WIDTH,
-            VRAM_HEIGHT,
+            VRAM_WIDTH * 2,
+            VRAM_HEIGHT * 2,
             glow::RGBA8 as i32,
             glow::RGBA,
             glow::UNSIGNED_BYTE,
-        ); // 1x for now
+        );
 
-        let (present_program, present_vao, present_uniforms) =
-            drawing::create_present_pipeline(&gl);
+        let present_pipeline = create_present_pipeline(&gl);
+
+        let flat_batch = FlatBatch::new();
+        let flat_pipeline = create_flat_pipeline(&gl);
 
         Self {
             gl,
             accurate_target,
             enhanced_target,
-            present_program,
-            present_vao,
-            present_uniforms,
             canvas_width,
             canvas_height,
+            present_pipeline,
+            flat_batch,
+            flat_pipeline,
         }
     }
 
@@ -94,10 +102,91 @@ impl WebGlBackend {
         self.canvas_width = width;
         self.canvas_height = height;
     }
+
+    /// Flush all drawing batches to both targets, preparing for a VRAM read or present call
+    fn flush(&mut self) {
+        self.flush_flat();
+        self.flush_textured();
+    }
 }
 
 impl GpuBackend for WebGlBackend {
-    fn draw_polygon(&mut self, polygon: &Polygon, params: &DrawParams) {}
+    fn draw_polygon(&mut self, polygon: &Polygon, params: &DrawParams) {
+        let dither = params.draw_mode.dither;
+        let semi_transparency_mode = params.draw_mode.semi_transparency;
+        match polygon {
+            Polygon::Monochrome {
+                colour,
+                vertices,
+                semi_transparent,
+            } => {
+                vertices.triangles(|v0, v1, v2| {
+                    let verts = [
+                        FlatGlVertex::new(
+                            v0.vertex.x,
+                            v0.vertex.y,
+                            *colour,
+                            dither,
+                            *semi_transparent,
+                            semi_transparency_mode,
+                        ),
+                        FlatGlVertex::new(
+                            v1.vertex.x,
+                            v1.vertex.y,
+                            *colour,
+                            dither,
+                            *semi_transparent,
+                            semi_transparency_mode,
+                        ),
+                        FlatGlVertex::new(
+                            v2.vertex.x,
+                            v2.vertex.y,
+                            *colour,
+                            dither,
+                            *semi_transparent,
+                            semi_transparency_mode,
+                        ),
+                    ];
+                    self.queue_flat(&verts, &params.drawing_area, &params.drawing_offset);
+                });
+            }
+            Polygon::Shaded {
+                vertices,
+                semi_transparent,
+            } => {
+                vertices.triangles(|v0, v1, v2| {
+                    let verts = [
+                        FlatGlVertex::new(
+                            v0.vertex.x,
+                            v0.vertex.y,
+                            v0.colour,
+                            dither,
+                            *semi_transparent,
+                            semi_transparency_mode,
+                        ),
+                        FlatGlVertex::new(
+                            v1.vertex.x,
+                            v1.vertex.y,
+                            v1.colour,
+                            dither,
+                            *semi_transparent,
+                            semi_transparency_mode,
+                        ),
+                        FlatGlVertex::new(
+                            v2.vertex.x,
+                            v2.vertex.y,
+                            v2.colour,
+                            dither,
+                            *semi_transparent,
+                            semi_transparency_mode,
+                        ),
+                    ];
+                    self.queue_flat(&verts, &params.drawing_area, &params.drawing_offset);
+                });
+            }
+            _ => {}
+        }
+    }
 
     fn draw_line(&mut self, line: &Line, params: &DrawParams) {}
 
@@ -130,15 +219,77 @@ impl GpuBackend for WebGlBackend {
     fn vram_write(&mut self, word: u32) {}
 
     fn present(&mut self, output: &DisplayOutput) {
+        // Flush any pending batches before presenting
+        self.flush();
+
         drawing::present(
             &self.gl,
-            self.present_program,
-            self.present_vao,
-            &self.present_uniforms,
+            &self.present_pipeline,
             &self.enhanced_target,
             self.canvas_width,
             self.canvas_height,
             output,
         );
+    }
+}
+
+// Debug methods
+impl WebGlBackend {
+    pub fn dump_accurate_target(&self) -> (u32, u32, Vec<u8>) {
+        let width = self.accurate_target.width;
+        let height = self.accurate_target.height;
+
+        let mut raw = vec![0u16; (width * height) as usize];
+        unsafe {
+            self.gl
+                .bind_framebuffer(glow::FRAMEBUFFER, Some(self.accurate_target.framebuffer));
+            self.gl.read_pixels(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                glow::RED_INTEGER,
+                glow::UNSIGNED_SHORT,
+                glow::PixelPackData::Slice(bytemuck::cast_slice_mut(&mut raw)),
+            );
+            self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+
+        // Decode RGB555 -> RGBA8 for viewing
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for pixel in raw {
+            let r = ((pixel & 0x1F) as u32 * 255 / 31) as u8;
+            let g = (((pixel >> 5) & 0x1F) as u32 * 255 / 31) as u8;
+            let b = (((pixel >> 10) & 0x1F) as u32 * 255 / 31) as u8;
+            rgba.push(r);
+            rgba.push(g);
+            rgba.push(b);
+            rgba.push(255);
+        }
+
+        (width, height, rgba)
+    }
+
+    pub fn dump_enhanced_target(&self) -> (u32, u32, Vec<u8>) {
+        let width = self.enhanced_target.width;
+        let height = self.enhanced_target.height;
+
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        unsafe {
+            self.gl
+                .bind_framebuffer(glow::FRAMEBUFFER, Some(self.enhanced_target.framebuffer));
+            self.gl.read_pixels(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(&mut rgba),
+            );
+            self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+
+        (width, height, rgba)
     }
 }

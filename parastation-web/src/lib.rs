@@ -50,4 +50,31 @@ impl WebRunner {
     pub fn drain_audio(&mut self, max_frames: usize) -> Vec<f32> {
         self.inner.drain_audio(max_frames)
     }
+
+    pub fn dump_accurate_vram(&self) -> Option<js_sys::Uint8Array> {
+        self.inner
+            .dump_accurate_vram()
+            .map(|(_, _, bytes)| js_sys::Uint8Array::from(bytes.as_slice()))
+    }
+
+    pub fn dump_enhanced_vram(&self) -> Option<js_sys::Uint8Array> {
+        self.inner
+            .dump_enhanced_vram()
+            .map(|(_, _, bytes)| js_sys::Uint8Array::from(bytes.as_slice()))
+    }
+
+    // Pretty stupid way to do this
+    pub fn accurate_vram_dims(&self) -> Vec<u32> {
+        self.inner
+            .dump_accurate_vram()
+            .map(|(w, h, _)| vec![w, h])
+            .unwrap_or_default()
+    }
+
+    pub fn enhanced_vram_dims(&self) -> Vec<u32> {
+        self.inner
+            .dump_enhanced_vram()
+            .map(|(w, h, _)| vec![w, h])
+            .unwrap_or_default()
+    }
 }
