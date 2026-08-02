@@ -12,10 +12,11 @@ mod batch;
 mod drawing;
 mod render_target;
 pub mod shared_gpu_handle;
+mod vram;
 
 // Imports
 use glow::HasContext;
-use parastation_core::gpu::backend::GpuBackend;
+use parastation_core::{gpu::backend::GpuBackend};
 use parastation_core::gpu::*;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext};
@@ -23,6 +24,7 @@ use web_sys::{HtmlCanvasElement, WebGl2RenderingContext};
 use batch::FlatBatch;
 use drawing::*;
 use render_target::{RenderTarget, VRAM_HEIGHT, VRAM_WIDTH};
+use vram::*;
 
 /// Acquire a WebGL2 context from a canvas element and wrap it into a glow::Context
 pub fn create_gl_context(canvas: &HtmlCanvasElement) -> glow::Context {
@@ -36,15 +38,6 @@ pub fn create_gl_context(canvas: &HtmlCanvasElement) -> glow::Context {
     glow::Context::from_webgl2_context(webgl2_context)
 }
 
-/// Cached uniforms for the present shader program to avoid calling glGetUniformLocation every frame call
-pub struct PresentUniforms {
-    pub source: Option<glow::UniformLocation>,
-    pub display_origin: Option<glow::UniformLocation>,
-    pub display_size: Option<glow::UniformLocation>,
-    pub screen_offset: Option<glow::UniformLocation>,
-    pub screen_size: Option<glow::UniformLocation>,
-}
-
 /// WebGL backend implementation of the GPUBackend trait. Has some enhancements over the OpenGL backend, with upscaled
 /// and 24bit colour rendering
 pub struct WebGlBackend {
@@ -56,7 +49,11 @@ pub struct WebGlBackend {
     canvas_width: u32,
     canvas_height: u32,
 
+    // VRAM transfers
+    vram_write_transfer: Option<VramWriteTransfer>,
+    
     present_pipeline: PresentPipeline,
+    reinterpret_pipeline: ReinterpretPipeline,
 
     flat_batch: FlatBatch,
     flat_pipeline: FlatPipeline,
@@ -82,6 +79,7 @@ impl WebGlBackend {
         );
 
         let present_pipeline = create_present_pipeline(&gl);
+        let reinterpret_pipeline = create_reinterpret_pipeline(&gl);
 
         let flat_batch = FlatBatch::new();
         let flat_pipeline = create_flat_pipeline(&gl);
@@ -93,6 +91,8 @@ impl WebGlBackend {
             canvas_width,
             canvas_height,
             present_pipeline,
+            reinterpret_pipeline,
+            vram_write_transfer: None,
             flat_batch,
             flat_pipeline,
         }
@@ -214,9 +214,35 @@ impl GpuBackend for WebGlBackend {
         None
     }
 
-    fn vram_write_begin(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16, mask: &Mask) {}
+    fn vram_write_begin(&mut self, vram_x: u16, vram_y: u16, w: u16, h: u16, mask: &Mask) {
+        self.vram_write_transfer = Some(VramWriteTransfer {
+            x: vram_x,
+            y: vram_y,
+            w,
+            h,
+            pixels_left: w as u32 * h as u32,
+            pixels: Vec::with_capacity(w as usize * h as usize),
+        })
+    }
 
-    fn vram_write(&mut self, word: u32) {}
+    fn vram_write(&mut self, word: u32) {
+        let Some(transfer) = &mut self.vram_write_transfer else {
+            return;
+        };
+
+        for pixel in [word as u16, (word >> 16) as u16] {
+            if transfer.pixels_left == 0 {
+                break;
+            }
+            transfer.pixels.push(pixel);
+            transfer.pixels_left -= 1;
+        }
+
+        if transfer.pixels_left == 0 {
+            let mut completed = self.vram_write_transfer.take().unwrap();
+            self.complete_vram_write(&mut completed);
+        }
+    }
 
     fn present(&mut self, output: &DisplayOutput) {
         // Flush any pending batches before presenting

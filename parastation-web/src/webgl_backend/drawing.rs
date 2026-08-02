@@ -12,11 +12,10 @@
 use glow::HasContext;
 use parastation_core::gpu::{Colour, DisplayOutput, DrawingArea, DrawingOffset};
 
-use super::PresentUniforms;
 use super::WebGlBackend;
-use super::render_target::{RenderTarget, VRAM_HEIGHT, VRAM_WIDTH};
+use super::render_target::{RenderTarget, VRAM_WIDTH, VRAM_HEIGHT};
 
-unsafe fn compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str) -> glow::Program {
+pub unsafe fn compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str) -> glow::Program {
     unsafe {
         let vert = gl.create_shader(glow::VERTEX_SHADER).unwrap();
         gl.shader_source(vert, vert_src);
@@ -56,6 +55,14 @@ unsafe fn compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str) ->
 }
 
 // Present pipeline
+pub struct PresentUniforms {
+    pub source: Option<glow::UniformLocation>,
+    pub display_origin: Option<glow::UniformLocation>,
+    pub display_size: Option<glow::UniformLocation>,
+    pub screen_offset: Option<glow::UniformLocation>,
+    pub screen_size: Option<glow::UniformLocation>,
+}
+
 pub struct PresentPipeline {
     pub program: glow::Program,
     pub vertex_array: glow::VertexArray,
