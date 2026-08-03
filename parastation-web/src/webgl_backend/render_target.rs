@@ -95,4 +95,25 @@ impl RenderTarget {
             framebuffer
         }
     }
+
+    pub fn blit_full(gl: &glow::Context, src: &RenderTarget, dst: &RenderTarget) {
+        unsafe {
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(src.framebuffer));
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(dst.framebuffer));
+            gl.blit_framebuffer(
+                0,
+                0,
+                src.width as i32,
+                src.height as i32,
+                0,
+                0,
+                dst.width as i32,
+                dst.height as i32,
+                glow::COLOR_BUFFER_BIT,
+                glow::NEAREST,
+            );
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
+        }
+    }
 }

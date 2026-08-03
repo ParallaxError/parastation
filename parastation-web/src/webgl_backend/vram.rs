@@ -10,7 +10,6 @@
 
 // Imports
 use glow::HasContext;
-use parastation_core::log;
 
 use super::WebGlBackend;
 use super::drawing::compile_program;
@@ -22,6 +21,15 @@ pub struct VramWriteTransfer {
     pub w: u16,
     pub h: u16,
     pub pixels_left: u32,
+    pub pixels: Vec<u16>,
+}
+
+pub struct VramReadTransfer {
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
+    pub cursor: u32,
     pub pixels: Vec<u16>,
 }
 
@@ -45,7 +53,6 @@ const REINTERPRET_FRAG: &str = include_str!("shaders/reinterpret.frag");
 
 pub fn create_reinterpret_pipeline(gl: &glow::Context) -> ReinterpretPipeline {
     unsafe {
-        log!("{}", REINTERPRET_FRAG);
         let program = compile_program(gl, REINTERPRET_VERT, REINTERPRET_FRAG);
         let vao = gl.create_vertex_array().unwrap();
 
@@ -140,6 +147,40 @@ impl WebGlBackend {
             self.gl
                 .bind_vertex_array(Some(self.reinterpret_pipeline.vao));
             self.gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+        }
+    }
+
+    /// Create a VRAM read transfer and populate it with the current pixels in the accurate framebuffer
+    pub(super) fn create_vram_read_transfer(
+        &self,
+        x: u16,
+        y: u16,
+        w: u16,
+        h: u16,
+    ) -> VramReadTransfer {
+        let mut pixels = vec![0u16; (w as usize) * (h as usize)];
+
+        unsafe {
+            self.gl
+                .bind_framebuffer(glow::FRAMEBUFFER, Some(self.accurate_target.framebuffer));
+            self.gl.read_pixels(
+                x as i32,
+                y as i32,
+                w as i32,
+                h as i32,
+                glow::RED_INTEGER,
+                glow::UNSIGNED_SHORT,
+                glow::PixelPackData::Slice(bytemuck::cast_slice_mut(&mut pixels)),
+            );
+        }
+
+        VramReadTransfer {
+            x,
+            y,
+            w,
+            h,
+            cursor: 0,
+            pixels,
         }
     }
 }

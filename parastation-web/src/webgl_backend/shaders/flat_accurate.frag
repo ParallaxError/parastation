@@ -43,7 +43,6 @@ void main() {
 
     bool is_semi_transparent = frag_semi_transparent > 0.5;
     int mode = int(frag_semi_transparency_mode + 0.5);
-    is_semi_transparent = false; // TODO figure this out
 
     if (is_semi_transparent) {
         uint old = vram_read(ivec2(gl_FragCoord.xy));

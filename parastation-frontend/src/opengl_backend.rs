@@ -830,7 +830,6 @@ impl GpuBackend for OpenGlBackend {
                 semi_transparent,
             } => {
                 vertices.triangles(|v0, v1, v2| {
-                    // For shaded textured, we will just use the colour of the first vertex for now
                     self.draw_shaded_textured_triangle(
                         v0,
                         v1,
