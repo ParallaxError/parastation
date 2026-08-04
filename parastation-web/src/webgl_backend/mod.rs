@@ -19,15 +19,15 @@ use glow::HasContext;
 use parastation_core::gpu::backend::GpuBackend;
 use parastation_core::{elog, gpu::*};
 use wasm_bindgen::JsCast;
-use web_sys::{HtmlCanvasElement, WebGl2RenderingContext};
+use web_sys::{OffscreenCanvas, WebGl2RenderingContext};
 
 use batch::{FlatBatch, TexturedBatch};
 use drawing::*;
 use render_target::{RenderTarget, VRAM_HEIGHT, VRAM_WIDTH};
 use vram::*;
 
-/// Acquire a WebGL2 context from a canvas element and wrap it into a glow::Context
-pub fn create_gl_context(canvas: &HtmlCanvasElement) -> glow::Context {
+/// Acquire a WebGL2 context from an OffscreenCanvas and wrap it into a glow::Context
+pub fn create_gl_context(canvas: &OffscreenCanvas) -> glow::Context {
     let webgl2_context = canvas
         .get_context("webgl2")
         .expect("Failed to query webgl2 context")

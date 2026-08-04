@@ -1,8 +1,9 @@
 /*
  * @file /parastation-web/src/runner.rs
  * @brief
- * Web frontend runner implementation for ParaStation. Encapsulates the behaviour to run the PS1 at a set framerate
- * while handling I/O events like audio/video output and keyboard input.
+ * Web frontend runner implementation for ParaStation. Runs inside a Worker, encapsulating the behaviour to run the PS1
+ * at a set framerate while handling I/O events like audio/video output and keyboard input communicated through
+ * postMessage.
  *
  * -----
  */
@@ -13,8 +14,11 @@ use std::rc::Rc;
 
 use parastation_core::bios::Bios;
 use parastation_core::{Interpreter, Ps1};
+use std::collections::HashMap;
+use web_sys::{File, OffscreenCanvas};
 
 use crate::dummy_backends::*;
+use crate::web_file::WebFile;
 use crate::web_spu_backend::{SharedSpuHandle, WebSpuBackend};
 use crate::webgl_backend::shared_gpu_handle::SharedGpuHandle;
 use crate::webgl_backend::{WebGlBackend, create_gl_context};
@@ -26,19 +30,19 @@ pub struct WebRunner {
     ps1: Option<Ps1<Interpreter>>,
     spu_handle: Option<Rc<RefCell<WebSpuBackend>>>,
     gpu_handle: Option<Rc<RefCell<WebGlBackend>>>,
-    canvas: web_sys::HtmlCanvasElement,
+    canvas: OffscreenCanvas,
 
     total_cycles_run: u64,
     total_frames_run: u64,
 }
 
 impl WebRunner {
-    pub fn new(canvas: &web_sys::HtmlCanvasElement) -> Self {
+    pub fn new(canvas: OffscreenCanvas) -> Self {
         Self {
             ps1: None,
             spu_handle: None,
             gpu_handle: None,
-            canvas: canvas.clone(),
+            canvas: canvas,
             total_cycles_run: 0,
             total_frames_run: 0,
         }
@@ -91,6 +95,21 @@ impl WebRunner {
             return Vec::new();
         };
         spu_handle.borrow_mut().drain_interleaved_f32(max_frames)
+    }
+
+    /// Inserts a CD-ROM disc into the PS1, given the CUE file content and a mapping of BIN filenames to browser
+    /// File handles
+    pub fn insert_disc(&mut self, cue_content: &str, bin_files: HashMap<String, File>) {
+        let Some(ps1) = &mut self.ps1 else {
+            return; // no BIOS loaded yet
+        };
+
+        ps1.insert_cdrom_disc(cue_content, &mut |filename: &str| {
+            let file = bin_files
+                .get(filename)
+                .unwrap_or_else(|| panic!("CUE references {filename} but it wasn't provided"));
+            Box::new(WebFile::new(file.clone())) as Box<dyn parastation_core::DiscSource>
+        });
     }
 
     // GPU debug methods

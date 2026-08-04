@@ -1,21 +1,23 @@
 /*
  * @file /parastation-web/src/lib.rs
  * @brief
- * Static webpage frontend for ParaStation.
- * This frontend is intended to be compiled to WebAssembly and run in a browser. The HTML and JS can then interface with
- * all the relevant parts of the emulator through the WebRunner class, which is exposed to JS via wasm-bindgen.
+ * Worker-side WebAssembly entry point for ParaStation. Runs entirely within a dedicated Worker so that the CD/ROM disc
+ * reading can use FileReaderSync, only available for workers. The main thread talks to the worker entirely through
+ * postMessage, the JavaScript has details on the interface.
  *
  * -----
  */
 
 mod dummy_backends;
 mod runner;
+mod web_file;
 mod web_logger;
 mod web_spu_backend;
 mod webgl_backend;
 
+use js_sys::{Array, Map};
 use wasm_bindgen::prelude::*;
-use web_sys::HtmlCanvasElement;
+use web_sys::{File, OffscreenCanvas};
 
 use runner::WebRunner as InnerRunner;
 
@@ -33,9 +35,9 @@ pub struct WebRunner {
 #[wasm_bindgen]
 impl WebRunner {
     #[wasm_bindgen(constructor)]
-    pub fn new(canvas: HtmlCanvasElement) -> Self {
+    pub fn new(canvas: OffscreenCanvas) -> Self {
         Self {
-            inner: InnerRunner::new(&canvas),
+            inner: InnerRunner::new(canvas),
         }
     }
 
@@ -49,6 +51,16 @@ impl WebRunner {
 
     pub fn drain_audio(&mut self, max_frames: usize) -> Vec<f32> {
         self.inner.drain_audio(max_frames)
+    }
+
+    pub fn insert_disc(&mut self, cue_content: String, bin_files: Map) {
+        let mut files = std::collections::HashMap::new();
+        bin_files.for_each(&mut |value, key| {
+            let name = key.as_string().unwrap_or_default();
+            let file: File = value.unchecked_into();
+            files.insert(name, file);
+        });
+        self.inner.insert_disc(&cue_content, files);
     }
 
     pub fn dump_accurate_vram(&self) -> Option<js_sys::Uint8Array> {
