@@ -45,11 +45,11 @@ impl Logger for WebLogger {
 
 /// Post a completed tty line to the main thread via postMessage
 fn post_tty_line(line: &str) {
-    // let scope: web_sys::DedicatedWorkerGlobalScope = js_sys::global().unchecked_into();
+    let scope: web_sys::DedicatedWorkerGlobalScope = js_sys::global().unchecked_into();
 
-    // let msg = Object::new();
-    // let _ = js_sys::Reflect::set(&msg, &"type".into(), &"tty".into());
-    // let _ = js_sys::Reflect::set(&msg, &"payload".into(), &JsValue::from_str(line));
+    let msg = Object::new();
+    let _ = js_sys::Reflect::set(&msg, &"type".into(), &"tty".into());
+    let _ = js_sys::Reflect::set(&msg, &"payload".into(), &JsValue::from_str(line));
 
-    // let _ = scope.post_message(&msg);
+    let _ = scope.post_message(&msg);
 }

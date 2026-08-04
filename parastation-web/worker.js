@@ -76,9 +76,15 @@ self.onmessage = async (e) => {
             break;
         }
 
-        // TODO keyboard input
-        case 'key_down':
-        case 'key_up': {
+        case 'input_down': {
+            if (!runner) break;
+            runner.input_down(msg.id);
+            break;
+        }
+
+        case 'input_up': {
+            if (!runner) break;
+            runner.input_up(msg.id);
             break;
         }
 

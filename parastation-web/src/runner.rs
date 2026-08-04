@@ -17,7 +17,7 @@ use parastation_core::{Interpreter, Ps1};
 use std::collections::HashMap;
 use web_sys::{File, OffscreenCanvas};
 
-use crate::dummy_backends::*;
+use crate::remappable_input_provider::*;
 use crate::web_file::WebFile;
 use crate::web_spu_backend::{SharedSpuHandle, WebSpuBackend};
 use crate::webgl_backend::shared_gpu_handle::SharedGpuHandle;
@@ -30,6 +30,7 @@ pub struct WebRunner {
     ps1: Option<Ps1<Interpreter>>,
     spu_handle: Option<Rc<RefCell<WebSpuBackend>>>,
     gpu_handle: Option<Rc<RefCell<WebGlBackend>>>,
+    controller_1_handle: Option<Rc<RefCell<RemappableInputProvider>>>,
     canvas: OffscreenCanvas,
 
     total_cycles_run: u64,
@@ -42,6 +43,7 @@ impl WebRunner {
             ps1: None,
             spu_handle: None,
             gpu_handle: None,
+            controller_1_handle: None,
             canvas: canvas,
             total_cycles_run: 0,
             total_frames_run: 0,
@@ -61,18 +63,26 @@ impl WebRunner {
         let spu_shared = Rc::new(RefCell::new(WebSpuBackend::new()));
         let spu_for_ps1 = Box::new(SharedSpuHandle::new(Rc::clone(&spu_shared)));
 
+        let controller_1_shared = Rc::new(RefCell::new(RemappableInputProvider::new(
+            JoypadState::new(),
+            DEFAULT_KEYBOARD_MAPPING,
+        )));
+        let controller_1_for_ps1 =
+            Box::new(SharedInputHandle::new(Rc::clone(&controller_1_shared)));
+
         let ps1 = Ps1::new(
             bios,
             Interpreter::new(),
             gpu_for_ps1,
             spu_for_ps1,
-            Box::new(DummyInputProvider),
+            controller_1_for_ps1,
             Box::new(DummyInputProvider),
         );
 
         self.ps1 = Some(ps1);
         self.spu_handle = Some(spu_shared);
         self.gpu_handle = Some(gpu_shared);
+        self.controller_1_handle = Some(controller_1_shared);
     }
 
     /// Runs the emulator for the given number of CPU cycles. Called once per requestAnimationFrame tick from JS for as
@@ -95,6 +105,20 @@ impl WebRunner {
             return Vec::new();
         };
         spu_handle.borrow_mut().drain_interleaved_f32(max_frames)
+    }
+
+    // Keyboard/touch generic input methods
+    // TODO should press for both controller 1 and 2
+    pub fn input_down(&mut self, key_code: &str) {
+        if let Some(handle) = &self.controller_1_handle {
+            handle.borrow().press(key_code);
+        }
+    }
+
+    pub fn input_up(&mut self, key_code: &str) {
+        if let Some(handle) = &self.controller_1_handle {
+            handle.borrow().release(key_code);
+        }
     }
 
     /// Inserts a CD-ROM disc into the PS1, given the CUE file content and a mapping of BIN filenames to browser

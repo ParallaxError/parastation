@@ -69,10 +69,10 @@ document.getElementById('disc-input').addEventListener('change', async (e) => {
 
 // Keyboard input forwarding to worker
 window.addEventListener('keydown', (e) => {
-    worker.postMessage({ type: 'key_down', code: e.code });
+    worker.postMessage({ type: 'input_down', id: e.code });
 });
 window.addEventListener('keyup', (e) => {
-    worker.postMessage({ type: 'key_up', code: e.code });
+    worker.postMessage({ type: 'input_up', id: e.code });
 });
 
 // Audio playback

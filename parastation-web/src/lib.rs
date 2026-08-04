@@ -8,14 +8,14 @@
  * -----
  */
 
-mod dummy_backends;
+mod remappable_input_provider;
 mod runner;
 mod web_file;
 mod web_logger;
 mod web_spu_backend;
 mod webgl_backend;
 
-use js_sys::{Array, Map};
+use js_sys::Map;
 use wasm_bindgen::prelude::*;
 use web_sys::{File, OffscreenCanvas};
 
@@ -51,6 +51,14 @@ impl WebRunner {
 
     pub fn drain_audio(&mut self, max_frames: usize) -> Vec<f32> {
         self.inner.drain_audio(max_frames)
+    }
+
+    pub fn input_down(&mut self, key_code: &str) {
+        self.inner.input_down(key_code);
+    }
+
+    pub fn input_up(&mut self, key_code: &str) {
+        self.inner.input_up(key_code);
     }
 
     pub fn insert_disc(&mut self, cue_content: String, bin_files: Map) {
