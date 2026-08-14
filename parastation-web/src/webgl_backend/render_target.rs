@@ -98,6 +98,7 @@ impl RenderTarget {
 
     pub fn blit_full(gl: &glow::Context, src: &RenderTarget, dst: &RenderTarget) {
         unsafe {
+            gl.disable(glow::SCISSOR_TEST);
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(src.framebuffer));
             gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(dst.framebuffer));
             gl.blit_framebuffer(

@@ -86,8 +86,8 @@ impl WebGlBackend {
 
         let enhanced_target = RenderTarget::new(
             &gl,
-            VRAM_WIDTH * 2,
-            VRAM_HEIGHT * 2,
+            VRAM_WIDTH * 4,
+            VRAM_HEIGHT * 4,
             glow::RGBA8 as i32,
             glow::RGBA,
             glow::UNSIGNED_BYTE,
@@ -95,8 +95,8 @@ impl WebGlBackend {
 
         let enhanced_sample = RenderTarget::new(
             &gl,
-            VRAM_WIDTH * 2,
-            VRAM_HEIGHT * 2,
+            VRAM_WIDTH * 4,
+            VRAM_HEIGHT * 4,
             glow::RGBA8 as i32,
             glow::RGBA,
             glow::UNSIGNED_BYTE,
@@ -171,7 +171,12 @@ impl GpuBackend for WebGlBackend {
 
                 vertices.triangles(|v0, v1, v2| {
                     let verts = [make_vert(&v0), make_vert(&v1), make_vert(&v2)];
-                    self.queue_flat(&verts, &params.drawing_area, &params.drawing_offset);
+                    self.queue_flat(
+                        &verts,
+                        &params.drawing_area,
+                        &params.drawing_offset,
+                        glow::TRIANGLES,
+                    );
                 });
             }
             Polygon::Shaded {
@@ -191,7 +196,12 @@ impl GpuBackend for WebGlBackend {
 
                 vertices.triangles(|v0, v1, v2| {
                     let verts = [make_vert(&v0), make_vert(&v1), make_vert(&v2)];
-                    self.queue_flat(&verts, &params.drawing_area, &params.drawing_offset);
+                    self.queue_flat(
+                        &verts,
+                        &params.drawing_area,
+                        &params.drawing_offset,
+                        glow::TRIANGLES,
+                    );
                 });
             }
             Polygon::Textured {
@@ -273,7 +283,64 @@ impl GpuBackend for WebGlBackend {
         }
     }
 
-    fn draw_line(&mut self, line: &Line, params: &DrawParams) {}
+    fn draw_line(&mut self, line: &Line, params: &DrawParams) {
+        let dither = params.draw_mode.dither;
+        let semi_transparency_mode = params.draw_mode.semi_transparency;
+
+        match line {
+            Line::Monochrome {
+                colour,
+                vertices,
+                semi_transparent,
+            } => {
+                let verts: Vec<FlatGlVertex> = vertices
+                    .iter()
+                    .map(|v| {
+                        FlatGlVertex::new(
+                            v.vertex.x,
+                            v.vertex.y,
+                            *colour,
+                            dither,
+                            *semi_transparent,
+                            semi_transparency_mode,
+                        )
+                    })
+                    .collect();
+
+                let mode = if verts.len() > 2 {
+                    glow::LINE_STRIP
+                } else {
+                    glow::LINES
+                };
+                self.queue_flat(&verts, &params.drawing_area, &params.drawing_offset, mode);
+            }
+            Line::Coloured {
+                vertices,
+                semi_transparent,
+            } => {
+                let verts: Vec<FlatGlVertex> = vertices
+                    .iter()
+                    .map(|v| {
+                        FlatGlVertex::new(
+                            v.vertex.x,
+                            v.vertex.y,
+                            v.colour,
+                            dither,
+                            *semi_transparent,
+                            semi_transparency_mode,
+                        )
+                    })
+                    .collect();
+
+                let mode = if verts.len() > 2 {
+                    glow::LINE_STRIP
+                } else {
+                    glow::LINES
+                };
+                self.queue_flat(&verts, &params.drawing_area, &params.drawing_offset, mode);
+            }
+        }
+    }
 
     fn draw_rect(&mut self, rect: &Rect, params: &DrawParams) {
         let dither = params.draw_mode.dither;
@@ -317,7 +384,12 @@ impl GpuBackend for WebGlBackend {
                     flat(x0, y1),
                     flat(x1, y1),
                 ];
-                self.queue_flat(&verts, &params.drawing_area, &params.drawing_offset);
+                self.queue_flat(
+                    &verts,
+                    &params.drawing_area,
+                    &params.drawing_offset,
+                    glow::TRIANGLES,
+                );
             }
 
             Rect::Textured {
@@ -424,7 +496,7 @@ impl GpuBackend for WebGlBackend {
             flat(x0, y1),
             flat(x1, y1),
         ];
-        self.queue_flat(&verts, &drawing_area, &drawing_offset);
+        self.queue_flat(&verts, &drawing_area, &drawing_offset, glow::TRIANGLES);
     }
 
     fn clear_cache(&mut self) {}
@@ -619,6 +691,64 @@ impl WebGlBackend {
         unsafe {
             self.gl
                 .bind_framebuffer(glow::FRAMEBUFFER, Some(self.enhanced_target.framebuffer));
+            self.gl.read_pixels(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(&mut rgba),
+            );
+            self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+
+        (width, height, rgba)
+    }
+
+    pub fn dump_accurate_sample(&self) -> (u32, u32, Vec<u8>) {
+        let width = self.accurate_sample.width;
+        let height = self.accurate_sample.height;
+
+        let mut raw = vec![0u16; (width * height) as usize];
+        unsafe {
+            self.gl
+                .bind_framebuffer(glow::FRAMEBUFFER, Some(self.accurate_sample.framebuffer));
+            self.gl.read_pixels(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                glow::RED_INTEGER,
+                glow::UNSIGNED_SHORT,
+                glow::PixelPackData::Slice(bytemuck::cast_slice_mut(&mut raw)),
+            );
+            self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+
+        // Decode RGB555 -> RGBA8 for viewing
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for pixel in raw {
+            let r = ((pixel & 0x1F) as u32 * 255 / 31) as u8;
+            let g = (((pixel >> 5) & 0x1F) as u32 * 255 / 31) as u8;
+            let b = (((pixel >> 10) & 0x1F) as u32 * 255 / 31) as u8;
+            rgba.push(r);
+            rgba.push(g);
+            rgba.push(b);
+            rgba.push(255);
+        }
+
+        (width, height, rgba)
+    }
+
+    pub fn dump_enhanced_sample(&self) -> (u32, u32, Vec<u8>) {
+        let width = self.enhanced_sample.width;
+        let height = self.enhanced_sample.height;
+
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        unsafe {
+            self.gl
+                .bind_framebuffer(glow::FRAMEBUFFER, Some(self.enhanced_sample.framebuffer));
             self.gl.read_pixels(
                 0,
                 0,

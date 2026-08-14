@@ -83,6 +83,18 @@ impl WebRunner {
             .map(|(_, _, bytes)| js_sys::Uint8Array::from(bytes.as_slice()))
     }
 
+    pub fn dump_accurate_sample(&self) -> Option<js_sys::Uint8Array> {
+        self.inner
+            .dump_accurate_sample()
+            .map(|(_, _, bytes)| js_sys::Uint8Array::from(bytes.as_slice()))
+    }
+
+    pub fn dump_enhanced_sample(&self) -> Option<js_sys::Uint8Array> {
+        self.inner
+            .dump_enhanced_sample()
+            .map(|(_, _, bytes)| js_sys::Uint8Array::from(bytes.as_slice()))
+    }
+
     // Pretty stupid way to do this
     pub fn accurate_vram_dims(&self) -> Vec<u32> {
         self.inner

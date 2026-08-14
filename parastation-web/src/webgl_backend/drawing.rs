@@ -253,11 +253,11 @@ pub fn create_flat_pipeline(gl: &glow::Context) -> FlatPipeline {
 
         let enhanced_uniforms = FlatUniforms {
             scale: gl.get_uniform_location(enhanced_program, "scale"),
-            vram_sample: gl.get_uniform_location(enhanced_program, "vram_sample"),
+            vram_sample: gl.get_uniform_location(enhanced_program, "vram"),
         };
         let accurate_uniforms = FlatUniforms {
             scale: gl.get_uniform_location(accurate_program, "scale"),
-            vram_sample: gl.get_uniform_location(accurate_program, "vram_sample"),
+            vram_sample: gl.get_uniform_location(accurate_program, "vram"),
         };
 
         FlatPipeline {
@@ -355,18 +355,23 @@ impl WebGlBackend {
         verts: &[FlatGlVertex],
         drawing_area: &DrawingArea,
         drawing_offset: &DrawingOffset,
+        mode: u32,
     ) {
         // Flush all textured primitives first since they have a different layout
         self.flush_textured();
 
+        // Semi transparent polygons need a flush as they sample the framebuffer, which is not allowed mid draw call
+        if verts.iter().any(|v| v.is_semi_transparent > 0.0) {
+            self.flush_flat();
+        }
         // If drawing area varies we need to flush the batch before adding the new primitive, since drawing area uses
         // glScissor which can't be changed mid draw call
-        if self.flat_batch.needs_flush_for(drawing_area) {
+        else if self.flat_batch.needs_flush_for(drawing_area, mode) {
             self.flush_flat();
         }
 
         if self.flat_batch.is_empty() {
-            self.flat_batch.set_drawing_area(*drawing_area);
+            self.flat_batch.set_state(*drawing_area, mode);
         }
 
         let offset_verts: Vec<FlatGlVertex> = verts
@@ -391,7 +396,11 @@ impl WebGlBackend {
 
         self.sync_samples();
 
-        self.submit_flat(self.flat_batch.verts(), glow::TRIANGLES, &drawing_area);
+        self.submit_flat(
+            self.flat_batch.verts(),
+            self.flat_batch.mode(),
+            &drawing_area,
+        );
 
         self.flat_batch.clear();
     }
@@ -465,10 +474,10 @@ impl TexturedGlVertex {
             tex_page_x: tex_page_x as f32,
             tex_page_y: tex_page_y as f32,
             tex_depth: tex_depth as f32,
-            tex_window_mask_x: tex_window_mask_x as f32,
-            tex_window_mask_y: tex_window_mask_y as f32,
-            tex_window_offset_x: tex_window_offset_x as f32,
-            tex_window_offset_y: tex_window_offset_y as f32,
+            tex_window_mask_x: (tex_window_mask_x as f32) * 8.0,
+            tex_window_mask_y: (tex_window_mask_y as f32) * 8.0,
+            tex_window_offset_x: (tex_window_offset_x as f32) * 8.0,
+            tex_window_offset_y: (tex_window_offset_y as f32) * 8.0,
             is_raw_texture: is_raw_texture as u8 as f32,
             dither: dither as u8 as f32,
             semi_transparent: semi_transparent as u8 as f32,
@@ -660,9 +669,13 @@ impl WebGlBackend {
         // Flush all flat primitives first since they have a different layout
         self.flush_flat();
 
+        // Semi transparent polygons need a flush as they sample the framebuffer, which is not allowed mid draw call
+        if verts.iter().any(|v| v.semi_transparent > 0.0) {
+            self.flush_textured();
+        }
         // If drawing area varies we need to flush the batch before adding the new primitive, since drawing area uses
         // glScissor which can't be changed mid draw call
-        if self.textured_batch.needs_flush_for(drawing_area) {
+        else if self.textured_batch.needs_flush_for(drawing_area) {
             self.flush_textured();
         }
 

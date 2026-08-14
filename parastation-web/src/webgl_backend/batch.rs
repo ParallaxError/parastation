@@ -14,6 +14,7 @@ use super::drawing::{FlatGlVertex, TexturedGlVertex};
 pub struct FlatBatch {
     verts: Vec<FlatGlVertex>,
     current_drawing_area: Option<DrawingArea>,
+    current_mode: u32,
 }
 
 impl FlatBatch {
@@ -21,6 +22,7 @@ impl FlatBatch {
         Self {
             verts: Vec::new(),
             current_drawing_area: None,
+            current_mode: glow::TRIANGLES,
         }
     }
 
@@ -29,15 +31,16 @@ impl FlatBatch {
     }
 
     /// Returns true if adding a primitive with this drawing area would require flushing first.
-    pub fn needs_flush_for(&self, drawing_area: &DrawingArea) -> bool {
+    pub fn needs_flush_for(&self, drawing_area: &DrawingArea, mode: u32) -> bool {
         match &self.current_drawing_area {
             None => false,
-            Some(current_area) => current_area != drawing_area,
+            Some(current_area) => current_area != drawing_area || self.current_mode != mode,
         }
     }
 
-    pub fn set_drawing_area(&mut self, drawing_area: DrawingArea) {
+    pub fn set_state(&mut self, drawing_area: DrawingArea, mode: u32) {
         self.current_drawing_area = Some(drawing_area);
+        self.current_mode = mode;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -46,6 +49,10 @@ impl FlatBatch {
 
     pub fn drawing_area(&self) -> Option<&DrawingArea> {
         self.current_drawing_area.as_ref()
+    }
+
+    pub fn mode(&self) -> u32 {
+        self.current_mode
     }
 
     pub fn verts(&self) -> &[FlatGlVertex] {

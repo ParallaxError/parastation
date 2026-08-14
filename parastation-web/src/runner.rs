@@ -89,11 +89,10 @@ impl WebRunner {
     /// many cycles as are needed to keep up with the framerate
     pub fn tick_frame(&mut self, cycles: u32) {
         let Some(ps1) = &mut self.ps1 else {
-            return; // no BIOS loaded yet
+            return;
         };
 
         ps1.run(cycles as u64);
-        ps1.display();
         self.total_cycles_run += cycles as u64;
         self.total_frames_run += 1;
     }
@@ -145,5 +144,15 @@ impl WebRunner {
     pub fn dump_enhanced_vram(&self) -> Option<(u32, u32, Vec<u8>)> {
         let gpu_handle = self.gpu_handle.as_ref()?;
         Some(gpu_handle.borrow().dump_enhanced_target())
+    }
+
+    pub fn dump_accurate_sample(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let gpu_handle = self.gpu_handle.as_ref()?;
+        Some(gpu_handle.borrow().dump_accurate_sample())
+    }
+
+    pub fn dump_enhanced_sample(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let gpu_handle = self.gpu_handle.as_ref()?;
+        Some(gpu_handle.borrow().dump_enhanced_sample())
     }
 }

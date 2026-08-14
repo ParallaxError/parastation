@@ -76,7 +76,6 @@ void main() {
     bool is_raw_texture = frag_is_raw_texture > 0.5;
     bool dither = frag_dither > 0.5;
     bool is_semi_transparent = frag_semi_transparent > 0.5;
-    is_semi_transparent = false; // TODO fix
     int semi_transparency_mode = int(frag_semi_transparency_mode + 0.5);
 
     int out_r, out_g, out_b;

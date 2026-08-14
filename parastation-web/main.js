@@ -26,6 +26,15 @@ worker.onmessage = (e) => {
         log(payload);
     } else if (type === 'audio') {
         playAudioSamples(payload);
+    } else if (type === 'vram_dump') {
+        if (payload.accurate) {
+            downloadRgbaAsPng(payload.accurate.bytes, payload.accurate.width, payload.accurate.height, 'accurate_vram.png');
+            downloadRgbaAsPng(payload.accurate.sample, payload.accurate.width, payload.accurate.height, 'accurate_vram_sample.png');
+        }
+        if (payload.enhanced) {
+            downloadRgbaAsPng(payload.enhanced.bytes, payload.enhanced.width, payload.enhanced.height, 'enhanced_vram.png');
+            downloadRgbaAsPng(payload.enhanced.sample, payload.enhanced.width, payload.enhanced.height, 'enhanced_vram_sample.png');
+        }
     }
 };
 
@@ -107,3 +116,26 @@ function playAudioSamples(samples) {
     source.start(nextPlayTime);
     nextPlayTime += frameCount / 44100;
 }
+
+// Debug buttons
+function downloadRgbaAsPng(rgbaBytes, width, height, filename) {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    const imageData = new ImageData(new Uint8ClampedArray(rgbaBytes), width, height);
+    ctx.putImageData(imageData, 0, 0);
+
+    canvas.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    }, 'image/png');
+}
+
+document.getElementById('dump-vram-btn').addEventListener('click', () => {
+    worker.postMessage({ type: 'dump_vram' });
+});

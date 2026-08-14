@@ -556,6 +556,7 @@ impl SystemBus {
             match event {
                 SchedulerEvent::VBlank => {
                     self.interrupt_controller.raise_interrupt(Interrupt::VBlank);
+                    self.gpu.display();
                     self.scheduler
                         .schedule(SchedulerEvent::VBlank, VBLANK_CYCLES);
                 }
