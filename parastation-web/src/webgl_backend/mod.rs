@@ -639,6 +639,7 @@ impl GpuBackend for WebGlBackend {
             &self.gl,
             &self.present_pipeline,
             &self.enhanced_target,
+            &self.accurate_target,
             self.canvas_width,
             self.canvas_height,
             output,

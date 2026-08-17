@@ -57,6 +57,8 @@ pub unsafe fn compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str
 // Present pipeline
 pub struct PresentUniforms {
     pub source: Option<glow::UniformLocation>,
+    pub accurate_source: Option<glow::UniformLocation>, 
+    pub colour_depth: Option<glow::UniformLocation>,
     pub display_origin: Option<glow::UniformLocation>,
     pub display_size: Option<glow::UniformLocation>,
     pub screen_offset: Option<glow::UniformLocation>,
@@ -79,6 +81,8 @@ pub fn create_present_pipeline(gl: &glow::Context) -> PresentPipeline {
 
         let uniforms = PresentUniforms {
             source: gl.get_uniform_location(program, "source"),
+            accurate_source: gl.get_uniform_location(program, "accurate_source"),
+            colour_depth: gl.get_uniform_location(program, "colour_depth"),
             display_origin: gl.get_uniform_location(program, "display_origin"),
             display_size: gl.get_uniform_location(program, "display_size"),
             screen_offset: gl.get_uniform_location(program, "screen_offset"),
@@ -97,6 +101,7 @@ pub fn present(
     gl: &glow::Context,
     pipeline: &PresentPipeline,
     enhanced_target: &RenderTarget,
+    accurate_target: &RenderTarget,
     canvas_width: u32,
     canvas_height: u32,
     output: &DisplayOutput,
@@ -138,7 +143,15 @@ pub fn present(
         gl.active_texture(glow::TEXTURE0);
         gl.bind_texture(glow::TEXTURE_2D, Some(enhanced_target.texture));
 
+        gl.active_texture(glow::TEXTURE1);
+        gl.bind_texture(glow::TEXTURE_2D, Some(accurate_target.texture));
+        gl.uniform_1_i32(pipeline.uniforms.accurate_source.as_ref(), 1);
+
         gl.uniform_1_i32(pipeline.uniforms.source.as_ref(), 0);
+        gl.uniform_1_i32(
+            pipeline.uniforms.colour_depth.as_ref(),
+            output.colour_depth as i32,
+        );
         gl.uniform_2_f32(
             pipeline.uniforms.display_origin.as_ref(),
             output.vram_x as f32 / VRAM_WIDTH as f32,
