@@ -2,7 +2,7 @@
 
 ParaStation is a PSX core written in Rust, with example frontends for desktop (OpenGL) and a web-based (WASM + WebGL) site. The main core has no external crate dependencies and exposes platform-agnostic functionality and a simple interpreter for the CPU backend.
 
-The project was my opportunity to learn some Rust and use its ecosystem as well as learn more about the Playstation. Most of its functionality is implemented, but formal game compatibility and accurate timings were not tested. The web-based frontend is hosted on [GitHub pages](), however you must supply your own PS1 BIOS and games in the .cue+.bin format.
+The project was my opportunity to learn some Rust and use its ecosystem as well as learn more about the Playstation. Most of its functionality is implemented, but formal game compatibility and accurate timings were not tested. The web-based frontend is hosted on [GitHub pages](https://parallaxerror.github.io/parastation/), however you must supply your own PS1 BIOS and games in the .cue+.bin format.
 
 ## Crate Overview
 ParaStation consists of three crates:
