@@ -63,6 +63,22 @@ impl SioController {
             rx_data: 0,
         }
     }
+
+    pub fn get_memory_card(&mut self, port: u8) -> &[u8] {
+        match port {
+            1 => &self.memory_card1.get_data(),
+            2 => &self.memory_card2.get_data(),
+            _ => &[],
+        }
+    }
+
+    pub fn load_memory_card(&mut self, port: u8, data: &[u8]) {
+        match port {
+            1 => self.memory_card1.load_data(data),
+            2 => self.memory_card2.load_data(data),
+            _ => elog!("SIO0: Invalid memory card port: {}", port),
+        }
+    }
 }
 
 // Register interface

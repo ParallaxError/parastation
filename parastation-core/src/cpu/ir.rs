@@ -9,10 +9,10 @@
  * -----
  */
 
-use crate::elog;
 use crate::cpu::MipsRegister;
 use crate::cpu::cop0::Cop0Register;
 use crate::cpu::gte::GteRegister;
+use crate::elog;
 
 /// Enum representing a MIPS instruction, with variants for each instruction type (R, I, J) and
 /// each opcode/funct combination. This is the main IR for MIPS instructions in the emulator.   

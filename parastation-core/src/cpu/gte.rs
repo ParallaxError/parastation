@@ -10,8 +10,8 @@
  */
 
 // Imports
-use crate::elog;
 use crate::cpu::gte_div::gte_divide;
+use crate::elog;
 
 #[derive(Debug)]
 pub struct GteRegister(pub u8);

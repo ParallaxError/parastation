@@ -1,26 +1,112 @@
+<!-- AI declaration: I'm not a frontend guy so I generated this with Claude. However I do want to know some HTML so 
+ I tried my best to comment the elements, JS and CSS to get an idea of what was generated -->
+
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="utf-8">
-    <title>ParaStation</title>
+<meta charset="utf-8">
+<title>ParaStation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>ParaStation</h1>
 
-    <div>
-        <label>BIOS <input type="file" id="bios-input" accept=".bin"></label>
+  <!-- Start screen -->
+  <svg class="button-bg" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs><pattern height="160" id="ps1-buttons" patternUnits="userSpaceOnUse" width="160"><g fill="none" stroke-width="2.5"><path d="M28 20 L38 38 L18 38 Z" stroke="#5ec9a0" /><circle cx="122" cy="30" r="11" stroke="#e0574f" /><path d="M18 112 L34 128 M34 112 L18 128" stroke="#6f8de0" stroke-linecap="round" /><path d="M112 108 L128 108 L128 124 L112 124 Z" stroke="#e06fc4" transform="rotate(8 120 116)" /></g></pattern></defs><rect fill="url(#ps1-buttons)" height="100%" width="100%" x="0" y="0" /></svg>
+  <div id="startScreenWrapper">
+    <div class="sphere-decor top-left"></div>
+    <div class="sphere-decor top-left-small"></div>
+    <div class="sphere-decor bottom-right"></div>
+    <div class="sphere-decor bottom-right-small"></div>
+    <img class="logo-img" src="logo.png" alt="ParaStation">
+    <div class="start-screen" id="startScreen">
+        <div class="field">
+        <label>BIOS file</label>
+        <label class="file-drop" id="biosDrop" for="bios-input">Upload a BIOS .bin file</label>
+        <input type="file" id="bios-input" accept=".bin" hidden>
+        </div>
+
+        <div class="field">
+        <label>Render Scale</label>
+        <div class="scale-row">
+            <input class="scale-input" id="scaleInput" type="number" min="1" max="8" step="1" value="2" placeholder="e.g. 2">
+            <span class="scale-unit">x native</span>
+        </div>
+        <div class="preset-row">
+            <!-- Uses attributes to encode the scale so the JS handler is more dynamic -->
+            <button class="preset-btn" data-scale="1">1x</button>
+            <button class="preset-btn" data-scale="2">2x</button>
+            <button class="preset-btn" data-scale="4">4x</button>
+        </div>
+        </div>
+
+        <button class="start-btn" id="startBtn" disabled>Upload BIOS first</button>
     </div>
-    <div>
-        <label>Disc files <input type="file" id="disc-input" accept=".cue,.bin" multiple></label>
+  </div>
+
+  <!-- Play screen -->
+  <div class="play-screen" id="playScreen">
+    <div class="drawer-handle" id="drawerHandle">☰</div>
+
+    <div class="drawer" id="drawer">
+      <div class="drawer-section">
+        <h3>Disc</h3>
+        <label class="drawer-btn" id="discDrop" for="disc-input">Load Disc (.cue/.bin)</label>
+        <input type="file" id="disc-input" accept=".cue,.bin" multiple hidden>
+      </div>
+
+    <div class="drawer-section">
+        <h3>Memory Card 1</h3>
+        <label class="drawer-btn" id="memcardLoadDrop1" for="memcard-input-1">Load Memory Card 1</label>
+        <input type="file" id="memcard-input-1" data-port="0" accept=".mcd,.mcr,.mc" hidden>
+        <button class="drawer-btn" id="memcardSaveBtn1" data-port="0">Save Memory Card 1</button>
     </div>
-    <div>
-        <button id="dump-vram-btn">Dump VRAM</button>
+
+    <div class="drawer-section">
+        <h3>Memory Card 2</h3>
+        <label class="drawer-btn" id="memcardLoadDrop2" for="memcard-input-2">Load Memory Card 2</label>
+        <input type="file" id="memcard-input-2" data-port="1" accept=".mcd,.mcr,.mc" hidden>
+        <button class="drawer-btn" id="memcardSaveBtn2" data-port="1">Save Memory Card 2</button>
     </div>
 
-    <canvas id="ps1-canvas" width="1024" height="512"></canvas>
+      <div class="drawer-section">
+        <h3>Controls</h3>
+        <div class="remap-list">
+          <div class="remap-row"><span>Cross</span><span class="remap-key" data-button="Cross">KeyX</span></div>
+          <div class="remap-row"><span>Circle</span><span class="remap-key" data-button="Circle">KeyC</span></div>
+          <div class="remap-row"><span>Square</span><span class="remap-key" data-button="Square">KeyZ</span></div>
+          <div class="remap-row"><span>Triangle</span><span class="remap-key" data-button="Triangle">KeyA</span></div>
+          <div class="remap-row"><span>D-Pad Up</span><span class="remap-key" data-button="Up">ArrowUp</span></div>
+          <div class="remap-row"><span>D-Pad Down</span><span class="remap-key" data-button="Down">ArrowDown</span></div>
+          <div class="remap-row"><span>D-Pad Left</span><span class="remap-key" data-button="Left">ArrowLeft</span></div>
+          <div class="remap-row"><span>D-Pad Right</span><span class="remap-key" data-button="Right">ArrowRight</span></div>
+          <div class="remap-row"><span>L1</span><span class="remap-key" data-button="L1">KeyQ</span></div>
+          <div class="remap-row"><span>R1</span><span class="remap-key" data-button="R1">KeyE</span></div>
+          <div class="remap-row"><span>L2</span><span class="remap-key" data-button="L2">Digit1</span></div>
+          <div class="remap-row"><span>R2</span><span class="remap-key" data-button="R2">Digit3</span></div>
+          <div class="remap-row"><span>L3</span><span class="remap-key" data-button="L3">KeyF</span></div>
+          <div class="remap-row"><span>R3</span><span class="remap-key" data-button="R3">KeyG</span></div>
+          <div class="remap-row"><span>Start</span><span class="remap-key" data-button="Start">Enter</span></div>
+          <div class="remap-row"><span>Select</span><span class="remap-key" data-button="Select">ShiftRight</span></div>
+        </div>      
+      </div>
 
-    <pre id="log-output" style="background:#111; color:#0f0; padding:1em; max-height:200px; overflow-y:auto;"></pre>
+      <div class="drawer-section">
+        <h3>Debug</h3>
+        <button class="drawer-btn" id="dump-vram-btn">Dump VRAM</button>
+        <pre id="log-output"></pre>
+      </div>
+    </div>
 
-    <script type="module" src="main.js"></script>
+    <div class="game-canvas">
+      <!-- Size gets overriden by JS based on scale -->
+      <canvas id="ps1-canvas" width="1024" height="512"></canvas>
+    </div>
+  </div>
+
+  <script type="module" src="main.js"></script>
+  <script src="ui.js"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 /*
  * @file /parastation-core/src/logging.rs
  * @brief
- * Platform-agnostic logging and TTY output hooks. Replaces println! and eprintln! with log! and elog!, which are 
+ * Platform-agnostic logging and TTY output hooks. Replaces println! and eprintln! with log! and elog!, which are
  * implemented by the frontend.
  *
  * -----
@@ -19,7 +19,7 @@ thread_local! {
     static LOGGER: RefCell<Option<Box<dyn Logger>>> = RefCell::new(None);
 }
 
-/// Register the logger implementation for this thread. Must be called once at startup by the frontend before any 
+/// Register the logger implementation for this thread. Must be called once at startup by the frontend before any
 /// log!()/elog!()/tty_putchar() calls
 pub fn set_logger(logger: Box<dyn Logger>) {
     LOGGER.with(|l| *l.borrow_mut() = Some(logger));

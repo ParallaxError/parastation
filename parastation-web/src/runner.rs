@@ -13,7 +13,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use parastation_core::bios::Bios;
-use parastation_core::{Interpreter, Ps1};
+use parastation_core::sio0::JoypadButton;
+use parastation_core::{Interpreter, Ps1, log};
 use std::collections::HashMap;
 use web_sys::{File, OffscreenCanvas};
 
@@ -32,19 +33,21 @@ pub struct WebRunner {
     gpu_handle: Option<Rc<RefCell<WebGlBackend>>>,
     controller_1_handle: Option<Rc<RefCell<RemappableInputProvider>>>,
     canvas: OffscreenCanvas,
+    scale: u32,
 
     total_cycles_run: u64,
     total_frames_run: u64,
 }
 
 impl WebRunner {
-    pub fn new(canvas: OffscreenCanvas) -> Self {
+    pub fn new(canvas: OffscreenCanvas, scale: u32) -> Self {
         Self {
             ps1: None,
             spu_handle: None,
             gpu_handle: None,
             controller_1_handle: None,
             canvas: canvas,
+            scale: scale,
             total_cycles_run: 0,
             total_frames_run: 0,
         }
@@ -57,7 +60,9 @@ impl WebRunner {
         let height = self.canvas.height();
         let gl = create_gl_context(&self.canvas);
 
-        let gpu_shared = Rc::new(RefCell::new(WebGlBackend::new(gl, width, height)));
+        let gpu_shared = Rc::new(RefCell::new(WebGlBackend::new(
+            gl, width, height, self.scale,
+        )));
         let gpu_for_ps1 = Box::new(SharedGpuHandle::new(Rc::clone(&gpu_shared)));
 
         let spu_shared = Rc::new(RefCell::new(WebSpuBackend::new()));
@@ -120,6 +125,12 @@ impl WebRunner {
         }
     }
 
+    pub fn rebind_input(&mut self, id: String, button: WebJoypadButton) {
+        if let Some(handle) = &self.controller_1_handle {
+            handle.borrow_mut().rebind(id, button.into());
+        }
+    }
+
     /// Inserts a CD-ROM disc into the PS1, given the CUE file content and a mapping of BIN filenames to browser
     /// File handles
     pub fn insert_disc(&mut self, cue_content: &str, bin_files: HashMap<String, File>) {
@@ -133,6 +144,22 @@ impl WebRunner {
                 .unwrap_or_else(|| panic!("CUE references {filename} but it wasn't provided"));
             Box::new(WebFile::new(file.clone())) as Box<dyn parastation_core::DiscSource>
         });
+    }
+
+    /// Save data from the memory card to a byte array, which can then be saved to disk or sent over the network.
+    pub fn save_memory_card(&mut self, port: u8) -> Vec<u8> {
+        let Some(ps1) = &mut self.ps1 else {
+            return Vec::new(); // no BIOS loaded yet
+        };
+        ps1.save_memory_card(port)
+    }
+
+    /// Load data into the memory card from a byte array, which can be loaded from disk or received over the network.
+    pub fn load_memory_card(&mut self, port: u8, data: &[u8]) {
+        let Some(ps1) = &mut self.ps1 else {
+            return; // no BIOS loaded yet
+        };
+        ps1.load_memory_card(port, data);
     }
 
     // GPU debug methods

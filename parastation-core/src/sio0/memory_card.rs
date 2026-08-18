@@ -138,6 +138,15 @@ impl MemoryCard {
             sector_buffer_cursor: 0,
         }
     }
+
+    pub fn load_data(&mut self, data: &[u8]) {
+        assert_eq!(data.len(), 131072, "Memory card data must be 128KB");
+        self.data.copy_from_slice(data);
+    }
+
+    pub fn get_data(&self) -> &[u8] {
+        &self.data.as_slice()
+    }
 }
 
 impl MemoryCard {

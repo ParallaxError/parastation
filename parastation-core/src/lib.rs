@@ -10,7 +10,6 @@
 #![allow(dead_code)]
 
 // Modules
-pub mod logging;
 mod backend;
 pub mod bios;
 mod cd_rom;
@@ -19,6 +18,7 @@ mod dma;
 pub mod gpu;
 mod interpreter;
 mod interrupt_controller;
+pub mod logging;
 mod mdec;
 mod memory_map;
 mod ram;
@@ -144,5 +144,15 @@ impl<B: Backend> Ps1<B> {
         open_file: impl FnMut(&str) -> Box<dyn DiscSource>,
     ) {
         self.bus.insert_cdrom_disc(cue_content, open_file);
+    }
+
+    /// Save data from the memory card to a byte array, which can then be saved to disk or sent over the network.
+    pub fn save_memory_card(&mut self, port: u8) -> Vec<u8> {
+        self.bus.save_memory_card(port)
+    }
+
+    /// Load data into the memory card from a byte array, which can be loaded from disk or received over the network.
+    pub fn load_memory_card(&mut self, port: u8, data: &[u8]) {
+        self.bus.load_memory_card(port, data);
     }
 }

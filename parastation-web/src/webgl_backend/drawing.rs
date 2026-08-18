@@ -57,7 +57,7 @@ pub unsafe fn compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str
 // Present pipeline
 pub struct PresentUniforms {
     pub source: Option<glow::UniformLocation>,
-    pub accurate_source: Option<glow::UniformLocation>, 
+    pub accurate_source: Option<glow::UniformLocation>,
     pub colour_depth: Option<glow::UniformLocation>,
     pub display_origin: Option<glow::UniformLocation>,
     pub display_size: Option<glow::UniformLocation>,

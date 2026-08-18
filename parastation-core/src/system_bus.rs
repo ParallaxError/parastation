@@ -12,10 +12,10 @@
  */
 
 // Imports
-use crate::elog;
 use crate::bios::Bios;
 use crate::cd_rom::{CdRom, DiscSource};
 use crate::dma::{DmaController, DmaTransfer};
+use crate::elog;
 use crate::gpu::{Gpu, GpuBackend};
 use crate::interrupt_controller::{Interrupt, InterruptController};
 use crate::mdec::Mdec;
@@ -595,5 +595,14 @@ impl SystemBus {
         open_file: impl FnMut(&str) -> Box<dyn DiscSource>,
     ) {
         self.cd_rom.insert_disc(cue_content, open_file);
+    }
+
+    /// Save data from the memory card to a byte array, which can then be saved to disk or sent over the network.
+    pub fn save_memory_card(&mut self, port: u8) -> Vec<u8> {
+        self.sio.get_memory_card(port).to_vec()
+    }
+
+    pub fn load_memory_card(&mut self, port: u8, data: &[u8]) {
+        self.sio.load_memory_card(port, data);
     }
 }

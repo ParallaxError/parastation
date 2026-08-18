@@ -1,0 +1,378 @@
+/*
+ * @file /parastation-web/style.css
+ * @brief
+ * AI declaration: mostly made by Claude (I chose some colours). Don't know much about CSS sand suck at making good UI
+ * but I wanted to atleast understand what it did so its partially tweaked
+ *
+ * -----
+ */
+
+:root {
+  --bg: #0e0e37;
+  --panel: #10122c;
+  --panel-border: #2e3480;
+  --purple: #4f5be0;        /* was #8b5cf6 — pulled blue, off violet-magenta */
+  --purple-bright: #6f7aff; /* was #a78bfa */
+  --purple-dim: #2a2f8a;    /* was #5b21b6 */
+  --text: #e4e6f5;
+  --text-dim: #8890c0;
+  --glow: 0 0 24px rgba(79, 91, 224, 0.35);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0e0e37;
+  color: var(--text);
+  font-family: 'Fredoka', system-ui, sans-serif;   
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Start screen */
+.start-screen {
+  width: 420px;
+  padding: 40px;
+  background: var(--panel);
+  border: 3px solid var(--panel-border);
+  border-radius: 30px;
+  position: relative;
+  z-index: 10;
+}
+#startScreenWrapper {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.sphere-decor {
+  position: fixed;
+  z-index: 0;
+  pointer-events: none;
+  width: 200px;
+  height: 200px;
+  background: url('sphere.png') center / contain no-repeat;
+}
+.sphere-decor.top-left { top: -50px; left: -40px; }
+.sphere-decor.top-left-small { width: 130px; height: 130px; top: 60px; left: 110px; }
+.sphere-decor.bottom-right { bottom: -40px; right: 90px; }
+.sphere-decor.bottom-right-small { width: 110px; height: 110px; bottom: 10px; right: 20px; }
+.logo-img {
+  position: relative;
+  z-index: 1;
+  display: block;
+  margin: 0 auto 32px;
+  max-width: 580px;
+  height: auto;
+}
+.button-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  width: 100%;
+  height: 100%;
+  opacity: 0.15; /* adjust freely */
+}
+.field {
+  margin-bottom: 24px;
+}
+.field label {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.file-drop {
+  border: 1px var(--panel-border);
+  border-radius: 0px;
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  background: rgba(139, 92, 246, 0.03);
+}
+.file-drop:hover {
+  border-color: var(--purple);
+  background: rgba(139, 92, 246, 0.08);
+  color: var(--text);
+}
+.file-drop.loaded {
+  border-color: var(--purple-bright);
+  border-style: solid;
+  color: var(--purple-bright);
+}
+.scale-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.scale-input {
+  flex: 1;
+  background: #0d0817;
+  border: 1px solid var(--panel-border);
+  border-radius: 0px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  text-align: right;
+}
+.scale-input:focus {
+  border-color: var(--purple);
+}
+.scale-unit {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.preset-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.preset-btn {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  padding: 6px 4px;
+  border-radius: 0px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.preset-btn:hover {
+  border-color: var(--purple);
+  color: var(--purple-bright);
+}
+.start-btn {
+  width: 100%;
+  padding: 14px;
+  margin-top: 8px;
+  background: linear-gradient(135deg, var(--purple), #2f34a0);
+  border: none;
+  border-radius: 10px;
+  color: white;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.15s;
+}
+.start-btn:hover {
+  transform: translateY(-1px);
+}
+.start-btn:disabled {
+  background: var(--panel);  
+  border: 1px solid var(--panel-border);
+  box-shadow: none;
+  cursor: not-allowed;
+  color: var(--text-dim);
+}
+/* Play screen */
+.play-screen {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: transparent;
+}
+.play-screen.active { display: block; }
+.game-canvas {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+}
+#ps1-canvas {
+  max-width: 90%;
+  max-height: 90%;
+  background: #050308;
+  border: 1px solid var(--panel-border);
+  image-rendering: pixelated;
+}
+
+.remap-list {
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 4px; /* room for the scrollbar so it doesn't overlap the key badges */
+}
+.remap-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.remap-row:last-child {
+  border-bottom: none;
+}
+
+.remap-key {
+  background: #0d0817;
+  border: 1px solid var(--panel-border);
+}
+
+/* Drawer handle (hamburger menu) */
+.drawer-handle {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 64px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--purple-bright);
+  z-index: 21; /* above the drawer so it's always clickable */
+  font-size: 14px;
+  transition: left 0.25s ease, transform 0.15s ease;
+}
+.drawer-handle:hover {
+  color: var(--text);
+}
+/* When the drawer is open, the handle rides along its right edge and flips to a close arrow */
+.drawer-handle.open {
+  left: 280px;
+}
+
+/* Drawer */
+.drawer {
+  position: fixed;
+  left: -280px;
+  top: 0;
+  bottom: 0;
+  width: 280px;
+  background: var(--panel);
+  border-right: 1px solid var(--panel-border);
+  transition: left 0.25s ease;
+  z-index: 20;
+  padding: 24px 20px;
+  overflow-y: auto;
+}
+.drawer.open { left: 0; }
+.drawer-title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  margin-bottom: 20px;
+}
+.drawer-section {
+  margin-bottom: 28px;
+}
+.drawer-section h3 {
+  font-size: 14px;
+  color: var(--purple-bright);
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+.drawer-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: rgba(139, 92, 246, 0.06);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 0px;
+  font-size: 13px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.drawer-btn:hover {
+  border-color: var(--purple);
+  background: rgba(139, 92, 246, 0.12);
+}
+.remap-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.remap-key {
+  background: #0d0817;
+  border: 1px solid var(--panel-border);
+  padding: 3px 10px;
+  border-radius: 0px;
+  color: var(--purple-bright);
+  font-family: monospace;
+  font-size: 12px;
+}
+
+#log-output {
+  background: #0d0817;
+  border: 1px solid var(--panel-border);
+  border-radius: 0px;
+  padding: 10px;
+  color: #7de88b;
+  font-family: monospace;
+  font-size: 11px;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin-top: 8px;
+}
+
+.remap-list,
+.drawer,
+#log-output {
+  scrollbar-width: thin;
+  scrollbar-color: var(--purple) transparent;
+}
+
+.drawer::-webkit-scrollbar,
+.remap-list::-webkit-scrollbar,
+#log-output::-webkit-scrollbar {
+  width: 10px;
+}
+.drawer::-webkit-scrollbar-track,
+.remap-list::-webkit-scrollbar-track,
+#log-output::-webkit-scrollbar-track {
+  background: transparent;
+}
+.drawer::-webkit-scrollbar-thumb,
+.remap-list::-webkit-scrollbar-thumb,
+#log-output::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--purple), var(--purple-dim));
+  border-radius: 999px;
+  border: 2px solid var(--panel);
+  background-clip: padding-box;
+}
+.drawer::-webkit-scrollbar-thumb:hover,
+.remap-list::-webkit-scrollbar-thumb:hover,
+#log-output::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, var(--purple), var(--purple));
+  background-clip: padding-box;
+}
+#log-output::-webkit-scrollbar-thumb {
+  border-color: #0d0817;
+}
+.scale-input::-webkit-outer-spin-button,
+.scale-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.scale-input {
+  -moz-appearance: textfield; /* Firefox */
+}

@@ -10,6 +10,9 @@
  *   { type: 'load_disc', cueContent: string, binFiles: File[] }
  *   { type: 'input_down', code: string }
  *   { type: 'input_up', code: string }
+ *   { type: 'rebind_input', id: string, button: string }
+ *   { type: 'load_memcard', port: number, bytes: Uint8Array }
+ *   { type: 'save_memcard', port: number }
  *   { type: 'dump_vram' }
  *
  * Message protocol (worker -> main thread):
@@ -22,10 +25,11 @@
  *          width: number, height: number, bytes: Uint8Array, sample: Uint8Array
  *      } 
  *   }
+ *   { type: 'memcard_save', payload: { port: number, bytes: Uint8Array } }
  * -----
  */
 
-import init, { WebRunner } from './pkg/parastation_web.js';
+import init, { WebRunner, WebJoypadButton } from './pkg/parastation_web.js';
 
 let runner = null;
 const CYCLES_PER_SECOND = 33_868_800;
@@ -82,7 +86,7 @@ self.onmessage = async (e) => {
     switch (msg.type) {
         case 'init': {
             await init();
-            runner = new WebRunner(msg.canvas);
+            runner = new WebRunner(msg.canvas, msg.scale);
             self.postMessage({ type: 'log', payload: 'Worker initialized, WebRunner created' });
             self.requestAnimationFrame(frameLoop); // start the loop once, here
             break;
@@ -115,6 +119,34 @@ self.onmessage = async (e) => {
         case 'input_up': {
             if (!runner) break;
             runner.input_up(msg.id);
+            break;
+        }
+
+        case 'rebind_input': {
+            if (!runner) break;
+            const variant = WebJoypadButton[msg.button];
+            if (variant === undefined) {
+                self.postMessage({ type: 'log', payload: `Unknown button: ${msg.button}` });
+                break;
+            }
+            runner.rebind_input(msg.id, variant);
+            self.postMessage({ type: 'log', payload: `Rebound ${msg.button} to ${msg.id}` });
+            break;
+        }
+
+        case 'load_memcard': {
+            if (!runner) break;
+            runner.load_memory_card(msg.port, new Uint8Array(msg.bytes));
+            self.postMessage({ type: 'log', payload: `Memory card ${msg.port + 1} loaded` });
+            break;
+        }
+
+        case 'save_memcard': {
+            if (!runner) break;
+            const bytes = runner.save_memory_card(msg.port);
+            // print how many bytes
+            console.log(`Memory card ${msg.port + 1} saved, ${bytes.length} bytes`);
+            self.postMessage({ type: 'memcard_save', payload: { port: msg.port, bytes } }, [bytes.buffer]);
             break;
         }
 

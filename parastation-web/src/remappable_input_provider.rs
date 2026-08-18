@@ -13,8 +13,53 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
+use wasm_bindgen::prelude::*;
 
 use parastation_core::sio0::{InputProvider, JoypadButton};
+
+#[wasm_bindgen]
+#[derive(Copy, Clone)]
+pub enum WebJoypadButton {
+    Select,
+    L3,
+    R3,
+    Start,
+    Up,
+    Right,
+    Down,
+    Left,
+    L2,
+    R2,
+    L1,
+    R1,
+    Triangle,
+    Circle,
+    Cross,
+    Square,
+}
+
+impl From<WebJoypadButton> for JoypadButton {
+    fn from(b: WebJoypadButton) -> Self {
+        match b {
+            WebJoypadButton::Select => JoypadButton::Select,
+            WebJoypadButton::L3 => JoypadButton::L3,
+            WebJoypadButton::R3 => JoypadButton::R3,
+            WebJoypadButton::Start => JoypadButton::Start,
+            WebJoypadButton::Up => JoypadButton::Up,
+            WebJoypadButton::Right => JoypadButton::Right,
+            WebJoypadButton::Down => JoypadButton::Down,
+            WebJoypadButton::Left => JoypadButton::Left,
+            WebJoypadButton::L2 => JoypadButton::L2,
+            WebJoypadButton::R2 => JoypadButton::R2,
+            WebJoypadButton::L1 => JoypadButton::L1,
+            WebJoypadButton::R1 => JoypadButton::R1,
+            WebJoypadButton::Triangle => JoypadButton::Triangle,
+            WebJoypadButton::Circle => JoypadButton::Circle,
+            WebJoypadButton::Cross => JoypadButton::Cross,
+            WebJoypadButton::Square => JoypadButton::Square,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct JoypadState {

@@ -21,6 +21,8 @@ use web_sys::{File, OffscreenCanvas};
 
 use runner::WebRunner as InnerRunner;
 
+use crate::remappable_input_provider::WebJoypadButton;
+
 #[wasm_bindgen(start)]
 pub fn init() {
     console_error_panic_hook::set_once();
@@ -35,9 +37,9 @@ pub struct WebRunner {
 #[wasm_bindgen]
 impl WebRunner {
     #[wasm_bindgen(constructor)]
-    pub fn new(canvas: OffscreenCanvas) -> Self {
+    pub fn new(canvas: OffscreenCanvas, scale: u32) -> Self {
         Self {
-            inner: InnerRunner::new(canvas),
+            inner: InnerRunner::new(canvas, scale),
         }
     }
 
@@ -61,6 +63,10 @@ impl WebRunner {
         self.inner.input_up(key_code);
     }
 
+    pub fn rebind_input(&mut self, id: String, button: WebJoypadButton) {
+        self.inner.rebind_input(id, button);
+    }
+
     pub fn insert_disc(&mut self, cue_content: String, bin_files: Map) {
         let mut files = std::collections::HashMap::new();
         bin_files.for_each(&mut |value, key| {
@@ -69,6 +75,14 @@ impl WebRunner {
             files.insert(name, file);
         });
         self.inner.insert_disc(&cue_content, files);
+    }
+
+    pub fn save_memory_card(&mut self, port: u8) -> Vec<u8> {
+        self.inner.save_memory_card(port)
+    }
+
+    pub fn load_memory_card(&mut self, port: u8, data: Vec<u8>) {
+        self.inner.load_memory_card(port, &data);
     }
 
     pub fn dump_accurate_vram(&self) -> Option<js_sys::Uint8Array> {

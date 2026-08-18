@@ -10,11 +10,11 @@
 // Imports
 use std::collections::VecDeque;
 
-use crate::{log, elog};
 use crate::interrupt_controller::{Interrupt, InterruptController};
 use crate::scheduler::{Scheduler, SchedulerEvent};
 use crate::spu::PcmSample;
 use crate::xadpcm::{XaSubHeader, XadpcmDecoder};
+use crate::{elog, log};
 
 pub const SECTOR_SIZE: usize = 2352; // Size of a CD-ROM sector in bytes
 
@@ -252,7 +252,10 @@ impl CdRom {
 
                     log!(
                         "Parsed track {}: start_lba={}, file_index={}, file_offset={}",
-                        current_track_number, global_start_lba, current_file_index, file_offset
+                        current_track_number,
+                        global_start_lba,
+                        current_file_index,
+                        file_offset
                     );
 
                     tracks.push(Track {

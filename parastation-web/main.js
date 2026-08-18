@@ -8,22 +8,27 @@
  */
 
 const logOutput = document.getElementById('log-output');
-function log(msg) {
-    logOutput.textContent += msg + '\n';
+function log(msg, newline = true) {
+    if (newline) logOutput.textContent += msg + '\n';
+    else logOutput.textContent += msg;
     console.log(msg);
 }
 
-// Worker setup
-const worker = new Worker('worker.js', { type: 'module' });
+// Worker is created once the user finishes their initialisation process (bios, choosing canvas scale)
+let worker = null;
+let workerReady = false;
 
-worker.onerror = (e) => {
-    log(`WORKER ERROR: ${e.message} (${e.filename}:${e.lineno})`);
-};
-
-worker.onmessage = (e) => {
+function handleWorkerMessage(e) {
     const { type, payload } = e.data;
     if (type === 'log') {
         log(payload);
+    } else if (type == 'tty') {
+        // Only add the TTY prefix if the message isn't a newline, to avoid cluttering the log with [TTY] lines
+        if (payload === '\n') {
+            log(payload, false);
+        } else {
+            log(`[TTY] ${payload}`, false);
+        }
     } else if (type === 'audio') {
         playAudioSamples(payload);
     } else if (type === 'vram_dump') {
@@ -35,33 +40,69 @@ worker.onmessage = (e) => {
             downloadRgbaAsPng(payload.enhanced.bytes, payload.enhanced.width, payload.enhanced.height, 'enhanced_vram.png');
             downloadRgbaAsPng(payload.enhanced.sample, payload.enhanced.width, payload.enhanced.height, 'enhanced_vram_sample.png');
         }
+    } else if (type === 'memcard_save') {
+        downloadBytes(payload.bytes, `memcard_${payload.port}.mcd`);
+        log(`Memory card ${payload.port} saved`);
     }
-};
+}
 
-// Send the canvas to the Worker as an OffscreenCanvas, so the Worker can render directly into it without needing to
-// go through the main thread.
-const canvas = document.getElementById('ps1-canvas');
-const offscreenCanvas = canvas.transferControlToOffscreen();
+// Once the user selects a bios and scale we create the user here
+document.addEventListener('parastation-start', async (e) => {
+    if (worker) {
+        log('Start already in progress or completed; ignoring duplicate start.');
+        return;
+    }
+    const { biosFile, scale } = e.detail;
 
-// postMessage to transfer ownership and init
-worker.postMessage(
-    { type: 'init', canvas: offscreenCanvas },
-    [offscreenCanvas]
-);
+    // Native PS1 VRAM is 1024x512, canvas is scaled up by the user-selected factor (1x, 2x, 3x, etc)
+    // In practice this is kind of eager: no game is gonna display the whole VRAM since the ps1 can't even do that
+    // Might add debug options to do this though so Im doing this, I think browsers are optimised enough to not lag on
+    // huge canvases
+    const canvas = document.getElementById('ps1-canvas');
+    canvas.width = Math.round(1024 * scale);
+    canvas.height = Math.round(512 * scale);
 
-// BIOS upload callback
-document.getElementById('bios-input').addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    log(`Loading BIOS: ${file.name} (${bytes.length} bytes)`);
-    worker.postMessage({ type: 'load_bios', bytes }, [bytes.buffer]);
+    const offscreenCanvas = canvas.transferControlToOffscreen();
+
+    worker = new Worker('worker.js', { type: 'module' });
+    worker.onerror = (err) => {
+        // Add an alert so the user knows something went wrong, since the console might not be open
+        alert(`Worker error: ${err.message}`);
+        log(`Worker error: ${err.message}`);
+    };
+    worker.onmessage = handleWorkerMessage;
+
+    const ready = new Promise((resolve) => {
+        worker.onmessage = (e) => {
+            // Kind of a HACK
+            handleWorkerMessage(e);
+            if (e.data.type === 'log' && e.data.payload === 'Worker initialized, WebRunner created') {
+                worker.onmessage = handleWorkerMessage; // hand off to the normal handler
+                workerReady = true;
+                resolve();
+            }
+        };
+    });
+
+    worker.postMessage(
+        { type: 'init', canvas: offscreenCanvas, scale: scale },
+        [offscreenCanvas]
+    );
+    await ready;
+
+    const biosBytes = new Uint8Array(await biosFile.arrayBuffer());
+    log(`Loading BIOS: ${biosFile.name} (${biosBytes.length} bytes)`);
+    worker.postMessage({ type: 'load_bios', bytes: biosBytes }, [biosBytes.buffer]);
 });
 
 // Disc upload
-// Sends the .cue file's TEXT content plus the raw File handles for every .bin so the worker can read it with
+// Sends the .cue file's text content plus the raw File handles for every .bin so the worker can read it with
 // FileReaderSync
 document.getElementById('disc-input').addEventListener('change', async (e) => {
+    if (!workerReady) {
+        log('Cannot load disc yet: emulator is still starting up.');
+        return;
+    }
     const files = Array.from(e.target.files);
     const cueFile = files.find(f => f.name.toLowerCase().endsWith('.cue'));
     if (!cueFile) {
@@ -76,11 +117,67 @@ document.getElementById('disc-input').addEventListener('change', async (e) => {
     worker.postMessage({ type: 'load_disc', cueContent, binFiles });
 });
 
+// Memory card upload/save
+document.querySelectorAll('input[id^="memcard-input-"]').forEach((input) => {
+    input.addEventListener('change', async (e) => {
+        if (!workerReady) {
+            log('Cannot load memory card yet: emulator is still starting up.');
+            return;
+        }
+        const file = e.target.files[0];
+        if (!file) return;
+        const port = parseInt(input.dataset.port, 10);
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        log(`Loading memory card ${port + 1}: ${file.name} (${bytes.length} bytes)`);
+        worker.postMessage({ type: 'load_memcard', port: port + 1, bytes }, [bytes.buffer]);
+    });
+});
+
+document.querySelectorAll('button[id^="memcardSaveBtn"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+        if (!workerReady) {
+            log('Cannot save memory card yet: emulator is still starting up.');
+            return;
+        }
+        const port = parseInt(btn.dataset.port, 10);
+        worker.postMessage({ type: 'save_memcard', port: port + 1 });
+    });
+});
+
+function downloadBytes(bytes, filename) {
+    const blob = new Blob([bytes], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
 // Keyboard input forwarding to worker
+document.querySelectorAll('.remap-key').forEach((keyEl) => {
+    keyEl.addEventListener('click', () => {
+        if (!workerReady) return;
+        const buttonName = keyEl.dataset.button; // e.g. "Cross" — already on these elements
+        const previousText = keyEl.textContent;
+        keyEl.textContent = 'Press a key…';
+
+        const captureKey = (e) => {
+            e.preventDefault();
+            worker.postMessage({ type: 'rebind_input', id: e.code, button: buttonName });
+            keyEl.textContent = e.code;
+            window.removeEventListener('keydown', captureKey);
+        };
+        window.addEventListener('keydown', captureKey);
+    });
+});
+
 window.addEventListener('keydown', (e) => {
+    if (!workerReady) return;
     worker.postMessage({ type: 'input_down', id: e.code });
 });
 window.addEventListener('keyup', (e) => {
+    if (!workerReady) return;
     worker.postMessage({ type: 'input_up', id: e.code });
 });
 
@@ -117,7 +214,7 @@ function playAudioSamples(samples) {
     nextPlayTime += frameCount / 44100;
 }
 
-// Debug buttons
+// Debug: VRAM dump
 function downloadRgbaAsPng(rgbaBytes, width, height, filename) {
     const canvas = document.createElement('canvas');
     canvas.width = width;
@@ -137,5 +234,9 @@ function downloadRgbaAsPng(rgbaBytes, width, height, filename) {
 }
 
 document.getElementById('dump-vram-btn').addEventListener('click', () => {
+    if (!workerReady) {
+        log('Cannot dump VRAM yet: emulator is still starting up.');
+        return;
+    }
     worker.postMessage({ type: 'dump_vram' });
 });

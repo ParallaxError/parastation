@@ -66,7 +66,7 @@ pub struct WebGlBackend {
 }
 
 impl WebGlBackend {
-    pub fn new(gl: glow::Context, canvas_width: u32, canvas_height: u32) -> Self {
+    pub fn new(gl: glow::Context, canvas_width: u32, canvas_height: u32, scale: u32) -> Self {
         let accurate_target = RenderTarget::new(
             &gl,
             VRAM_WIDTH,
@@ -86,8 +86,8 @@ impl WebGlBackend {
 
         let enhanced_target = RenderTarget::new(
             &gl,
-            VRAM_WIDTH * 4,
-            VRAM_HEIGHT * 4,
+            VRAM_WIDTH * scale,
+            VRAM_HEIGHT * scale,
             glow::RGBA8 as i32,
             glow::RGBA,
             glow::UNSIGNED_BYTE,
@@ -95,8 +95,8 @@ impl WebGlBackend {
 
         let enhanced_sample = RenderTarget::new(
             &gl,
-            VRAM_WIDTH * 4,
-            VRAM_HEIGHT * 4,
+            VRAM_WIDTH * scale,
+            VRAM_HEIGHT * scale,
             glow::RGBA8 as i32,
             glow::RGBA,
             glow::UNSIGNED_BYTE,

@@ -257,7 +257,8 @@ impl Gpu {
             Gp0Command::SetRenderingAttribute => self.set_rendering_attribute(),
             _ => elog!(
                 "GP0 command execution not implemented: {:?}, gp0_buffer: {:X?}",
-                command, self.gp0_buffer
+                command,
+                self.gp0_buffer
             ),
         }
     }
